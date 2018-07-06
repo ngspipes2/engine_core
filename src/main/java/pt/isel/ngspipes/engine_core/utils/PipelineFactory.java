@@ -24,33 +24,43 @@ import java.util.*;
 
 public class PipelineFactory {
 
+    @FunctionalInterface
+    public interface IBiFunction<T, U, R> {
+
+        R apply(T t, U u) throws EngineException;
+
+    }
+
     public static Pipeline create(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
         Map<String, IToolsRepository> toolsRepos = getToolsRepositories(pipelineDescriptor.getRepositories(), parameters);
-        Map<String, IPipelinesRepository> pipelinesRepos = getPipelinesRepositories(pipelineDescriptor.getRepositories(), parameters);
+        Map<String, IPipelinesRepository> pipelinesRepos = getPipelinesRepositories(pipelineDescriptor.getRepositories(),
+                                                                                    parameters);
         Map<String, IStepDescriptor> steps = getSteps(pipelineDescriptor.getSteps());
 
         return new Pipeline(toolsRepos, pipelinesRepos, steps, parameters, pipelineDescriptor);
     }
 
-    public static Collection<JobUnit> createJobs(Pipeline pipeline, Arguments arguments) throws EngineException {
-        Collection<JobUnit> jobs = new LinkedList<>();
+    public static Map<String, JobUnit> createJobs(Pipeline pipeline, Arguments arguments) throws EngineException {
+        Map<String, JobUnit> jobs = new HashMap<>();
 
         for (Map.Entry<String, IStepDescriptor> entry : pipeline.getSteps().entrySet()) {
             IStepDescriptor step = entry.getValue();
             JobUnit job = createJob(pipeline, step, arguments);
-            jobs.add(job);
+            jobs.put(step.getId(), job);
         }
         return jobs;
     }
 
-    public static Map<String, IPipelinesRepository> getPipelinesRepositories(Collection<IRepositoryDescriptor> repositories, Map<String, Object> parameters) throws EngineException {
+    public static Map<String, IPipelinesRepository> getPipelinesRepositories(Collection<IRepositoryDescriptor> repositories,
+                                                                             Map<String, Object> parameters) throws EngineException {
         Map<String, IPipelinesRepository> pipelinesRepositoryMap = new HashMap<>();
 
         for (IRepositoryDescriptor repo : repositories) {
             if(pipelinesRepositoryMap.containsKey(repo.getId()))
                 throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
             if (repo instanceof IPipelineRepositoryDescriptor) {
-                IPipelinesRepository pipelinesRepo = RepositoryUtils.getPipelinesRepository((IPipelineRepositoryDescriptor) repo, parameters);
+                IPipelineRepositoryDescriptor pRepoDesc = (IPipelineRepositoryDescriptor) repo;
+                IPipelinesRepository pipelinesRepo = RepositoryUtils.getPipelinesRepository(pRepoDesc, parameters);
                 pipelinesRepositoryMap.put(repo.getId(), pipelinesRepo);
             }
         }
@@ -65,7 +75,8 @@ public class PipelineFactory {
             if(toolsRepositoryMap.containsKey(repo.getId()))
                 throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
             if (repo instanceof IToolRepositoryDescriptor) {
-                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository((IToolRepositoryDescriptor) repo, parameters);
+                IToolRepositoryDescriptor toolsRepoDesc = (IToolRepositoryDescriptor) repo;
+                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
                 toolsRepositoryMap.put(repo.getId(), toolsRepo);
             }
         }
@@ -85,7 +96,7 @@ public class PipelineFactory {
         return steps;
     }
 
-    public static Pipeline create(Pipeline pipeline, Collection<JobUnit> jobs) {
+    public static Pipeline create(Pipeline pipeline, Map<String, JobUnit> jobs) {
         return new Pipeline(pipeline.getToolsRepositories(), pipeline.getPipelinesRepositories(), pipeline.getSteps(),
                 pipeline.getParameters(), pipeline.getDescriptor(), jobs);
     }
@@ -111,9 +122,53 @@ public class PipelineFactory {
         state.setState(StateEnum.STAGING);
         Collection<String> inputs = getInputs(pipeline, step);
         Collection<String> outputs = getOutputs(pipeline, step);
+        int mem = getValue(pipeline, step, arguments.mem, DescriptorsUtils::getMemFromCommand);
+        int cpus = getValue(pipeline, step, arguments.cpus, DescriptorsUtils::getCpusFromCommand);
+        int disk = getValue(pipeline, step, arguments.disk, DescriptorsUtils::getDiskFromCommand);
 
-        return new JobUnit(step.getId(), arguments.mem, arguments.cpus, arguments.disk, inputs, outputs,
-                            arguments.outPath, workingDirectory, state);
+        return new JobUnit(step.getId(), mem, cpus, disk, inputs, outputs, arguments.outPath, workingDirectory, state);
+    }
+
+    private static int getValue(Pipeline pipeline, IStepDescriptor step, int value,
+                              IBiFunction<IToolsRepository, ICommandExecDescriptor, Integer> func) throws EngineException {
+        if (value != 0)
+            return value;
+
+        IExecDescriptor exec = step.getExec();
+        if (exec instanceof ICommandExecDescriptor) {
+            IToolsRepository toolsRepo = pipeline.getToolsRepositories().get(exec.getRepositoryId());
+            return func.apply(toolsRepo, (ICommandExecDescriptor) exec);
+        } else if (exec instanceof IPipelineExecDescriptor){
+            return getValueFromPipelineStep(pipeline, step, func);
+        }
+        return value;
+    }
+
+    private static int getValueFromPipelineStep(Pipeline pipeline, IStepDescriptor step,
+                                                IBiFunction<IToolsRepository, ICommandExecDescriptor, Integer> func)
+                                                throws EngineException {
+        return getHighestValueFromPipeline(pipeline, step, func);
+    }
+
+    private static int getHighestValueFromPipeline(Pipeline pipeline, IStepDescriptor step,
+                                                   IBiFunction<IToolsRepository, ICommandExecDescriptor, Integer> func)
+                                                    throws EngineException {
+        IExecDescriptor exec = step.getExec();
+        IPipelinesRepository pipelinesRepo = pipeline.getPipelinesRepositories().get(exec.getRepositoryId());
+        IPipelineExecDescriptor pExec = (IPipelineExecDescriptor) exec;
+        IPipelineDescriptor pipelineDesc = DescriptorsUtils.getPipelineDescriptor(pExec, step.getId(), pipelinesRepo);
+        int highest = 0;
+        for (IStepDescriptor stepDesc : pipelineDesc.getSteps()) {
+            IExecDescriptor execDesc = stepDesc.getExec();
+            if (execDesc instanceof ICommandDescriptor) {
+                IToolsRepository toolsRepo = pipeline.getToolsRepositories().get(execDesc.getRepositoryId());
+                int value = func.apply(toolsRepo, (ICommandExecDescriptor) execDesc);
+                if (highest < value) {
+                    highest = value;
+                }
+            }
+        }
+        return highest;
     }
 
     private static Collection<String> getOutputs(Pipeline pipeline, IStepDescriptor step) throws EngineException {
@@ -121,7 +176,7 @@ public class PipelineFactory {
 
         IExecDescriptor exec = step.getExec();
         IToolsRepository toolsRepository = pipeline.getToolsRepositories().get(exec.getRepositoryId());
-        ICommandDescriptor commandDescriptor = ToolsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) exec);
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) exec);
 
         for (IOutputDescriptor outputDescriptor : commandDescriptor.getOutputs()) {
             outputs.add(getOutputValue(outputDescriptor, step.getInputs(), pipeline));
@@ -181,7 +236,7 @@ public class PipelineFactory {
     private static String getInputValueAsString(IInputDescriptor inputDescriptor, Pipeline pipeline) throws EngineException {
 
         if (inputDescriptor instanceof IParameterInputDescriptor) {
-            Object inputValue = ToolsUtils.getInputValue(inputDescriptor, pipeline.getParameters());
+            Object inputValue = DescriptorsUtils.getInputValue(inputDescriptor, pipeline.getParameters());
             if (inputValue == null)
                 inputValue = "";
             return inputValue.toString();
@@ -212,8 +267,8 @@ public class PipelineFactory {
                                                  IStepDescriptor step) throws EngineException {
         IExecDescriptor exec = step.getExec();
         IToolsRepository toolsRepository = pipeline.getToolsRepositories().get(exec.getRepositoryId());
-        ICommandDescriptor commandDescriptor = ToolsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) exec);
-        return ToolsUtils.getOutputFromCommand(commandDescriptor, chainInput.getOutputName()).toString();
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) exec);
+        return DescriptorsUtils.getOutputFromCommand(commandDescriptor, chainInput.getOutputName()).toString();
     }
 
     private static String getOutputValueFromPipeline(IChainInputDescriptor chainInput, Pipeline pipeline,

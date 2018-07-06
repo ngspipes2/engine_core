@@ -4,20 +4,24 @@ import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IParameterInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.ISimpleInputDescriptor;
+import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
+import pt.isel.ngspipes.pipeline_repository.PipelinesRepositoryException;
 import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IOutputDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IParameterDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IToolDescriptor;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
-import utils.ToolRepositoryException;
+import utils.ToolsRepositoryException;
 
 import java.util.Collection;
 import java.util.Map;
 
-public class ToolsUtils {
+public class DescriptorsUtils {
 
 
     public static ICommandDescriptor getCommand(IToolsRepository toolsRepository, ICommandExecDescriptor commandExecDescriptor) throws EngineException {
@@ -29,7 +33,7 @@ public class ToolsUtils {
             ICommandDescriptor commandByName = getCommandByName(toolDescriptor.getCommands(), commandName);
             if (commandByName != null)
                 return commandByName;
-        } catch (ToolRepositoryException e) {
+        } catch (ToolsRepositoryException e) {
             throw new EngineException("Not tool found with name: " + toolName, e);
         }
 
@@ -89,4 +93,30 @@ public class ToolsUtils {
         throw new EngineException("No implementation exist to get the input: " + input.getInputName() + " value");
     }
 
+    public static int getMemFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
+        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
+        return command.getRecommendedMemory();
+    }
+
+    public static int getCpusFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
+        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
+        return command.getRecommendedCpu();
+    }
+
+    public static int getDiskFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
+        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
+        return command.getRecommendedDisk();
+    }
+
+    public static IPipelineDescriptor getPipelineDescriptor(IPipelineExecDescriptor exec, String stepId,
+                                                            IPipelinesRepository pipelinesRepo) throws EngineException {
+        IPipelineDescriptor pipelineDesc;
+        try {
+            String pipelineName = exec.getPipelineName();
+            return pipelinesRepo.get(pipelineName);
+
+        } catch (PipelinesRepositoryException e) {
+            throw new EngineException("Error loading pipeline step" + stepId + ".", e);
+        }
+    }
 }

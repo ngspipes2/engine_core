@@ -5,26 +5,25 @@ import java.util.List;
 
 public class ExecutionNode {
 
-    String id;
+    JobUnit job;
     List<ExecutionNode> childs;
 
-    public String getId() { return id; }
+    public JobUnit getJob() { return job; }
     public List<ExecutionNode> getChilds() { return childs; }
 
-    public ExecutionNode(String id, List<ExecutionNode> childs) {
-        this.id = id;
+    public ExecutionNode(JobUnit job, List<ExecutionNode> childs) {
+        this.job = job;
         this.childs = childs;
     }
 
-    public ExecutionNode(String id) {
-        this.id = id;
-        this.childs = new LinkedList<>();
+    public ExecutionNode(JobUnit job) {
+        this(job, new LinkedList<>());
     }
 
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof ExecutionNode)
-            return id.equals(((ExecutionNode) obj).getId());
+            return job.id.equals(((ExecutionNode) obj).job.id);
         return super.equals(obj);
     }
 }

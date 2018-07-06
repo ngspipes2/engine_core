@@ -12,9 +12,9 @@ import pt.isel.ngspipes.pipeline_descriptor.repository.value.IParameterValueDesc
 import pt.isel.ngspipes.pipeline_descriptor.repository.value.ISimpleValueDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.value.IValueDescriptor;
 import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
-import pt.isel.ngspipes.pipeline_repository.PipelineRepositoryException;
+import pt.isel.ngspipes.pipeline_repository.PipelinesRepositoryException;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
-import utils.ToolRepositoryException;
+import utils.ToolsRepositoryException;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -38,7 +38,7 @@ public class RepositoryUtils {
         try {
             IPipelinesRepository pipelinesRepository = PipelinesRepositoryFactory.create(location, config);
             return new CachePipelinesRepository(pipelinesRepository);
-        } catch (PipelineRepositoryException e) {
+        } catch (PipelinesRepositoryException e) {
             throw new EngineException("Error loading pipelines repository: " + location, e);
         }
     }
@@ -50,7 +50,7 @@ public class RepositoryUtils {
         try {
             IToolsRepository toolsRepository = ToolsRepositoryFactory.create(location, config);
             return new CacheToolsRepository(toolsRepository);
-        } catch (ToolRepositoryException e) {
+        } catch (ToolsRepositoryException e) {
             throw new EngineException("Error loading tools repository: " + location, e);
         }
     }
@@ -65,7 +65,7 @@ public class RepositoryUtils {
     }
 
     private static Object getValueFromValueDescriptor(IValueDescriptor value, String configurationName, Map<String, Object> params) throws EngineException {
-        if(value instanceof IParameterValueDescriptor)
+        if(value instanceof IParameterValueDescriptor && params != null && !params.isEmpty())
             return params.get(((IParameterValueDescriptor)value).getParameterName());
         if(value instanceof ISimpleValueDescriptor)
             return ((ISimpleValueDescriptor)value).getValue();

@@ -1,0 +1,76 @@
+Properties: {
+    author: "NGSPipes Team"
+    description: "Study case 1"
+    version:  "1.0"
+    documentation: ["http://ngspipes.readthedocs.io/en/latest/RunningExamples.html"]
+}
+
+Repositories: [
+    ToolRepository repo: {
+        location: "E:/Work/NGSPipes/ngspipes2/main/engine/engine_core/src/test/resources/tools_support"
+    }
+]
+
+Outputs: {
+    output1: trimmomatic[outputFile]
+    output2: blastx[outFile]
+}
+
+Steps: [
+    Step trimmomatic: {
+        exec: repo[Trimmomatic][trimmomatic]
+        execution_context: "DockerConfig"
+        inputs: {
+            mode: "SE"
+            quality: "phred33"
+            inputFile: "ERR406040.fastq"
+            outputFile: "ERR406040.filtered.fastq"
+            fastaWithAdaptersEtc: "TruSeq3-SE.fa"
+            seed_mismatches: 2
+            palindrome_clip_threshold: 30
+            simple_clip_threshold: 10
+            windowSize: 4
+            requiredQuality: 15
+            leading_quality: 3
+            trailing_quality: 3
+            minlen_length: 36
+        }
+    }
+    Step blastx: {
+        exec: repo[Blast][blastx]
+        execution_context: "DockerConfig"
+        inputs: {
+            db: makeblastdb[outFile]
+            query: velvetg[contigs_fa]
+            out: params.blastx_out
+        }
+    }
+    Step velveth: {
+        exec: repo[Velvet][velveth]
+        execution_context: "DockerConfig"
+        inputs: {
+            output_directory: "velvetdir"
+            hash_length: 21
+            file_format: "fastq"
+            filename: trimmomatic[outputFile]
+        }
+    }
+    Step velvetg: {
+        exec: repo[Velvet][velvetg]
+        execution_context: "DockerConfig"
+        inputs: {
+            output_directory: velveth[out_dir]
+            cov_cutoff: 5
+        }
+    }
+    Step makeblastdb: {
+        exec: repo[Blast][makeblastdb]
+        execution_context: "DockerConfig"
+        inputs: {
+            dbtype: "prot"
+            out: "allrefs"
+            title: "allrefs"
+            in: "allrefs.fna.pro"
+        }
+    }
+]

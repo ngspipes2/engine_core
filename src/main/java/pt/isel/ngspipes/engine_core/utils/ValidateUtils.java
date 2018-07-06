@@ -98,7 +98,7 @@ public class ValidateUtils {
 
     private static void validateSpreadInputsExistence(String stepId, Collection<String> inputsToSpread, Collection<IInputDescriptor> inputs) throws EngineException {
         for (String inputName : inputsToSpread) {
-            IInputDescriptor input = ToolsUtils.getInputByName(inputs, inputName);
+            IInputDescriptor input = DescriptorsUtils.getInputByName(inputs, inputName);
             if (input == null)
                 throw new EngineException("Using " + inputName + " as input to spread and " +
                         "isn't defined as input of step " + stepId + ".");
@@ -118,10 +118,10 @@ public class ValidateUtils {
 
     private static void validateCommandStep(IStepDescriptor step, IToolsRepository repository, Pipeline pipeline) throws EngineException {
         ICommandExecDescriptor commandExecDescriptor = (ICommandExecDescriptor) step.getExec();
-        ICommandDescriptor commandDescriptor = ToolsUtils.getCommand(repository, commandExecDescriptor);
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(repository, commandExecDescriptor);
 
         for (IParameterDescriptor parameterDescriptor : commandDescriptor.getParameters()) {
-            IInputDescriptor input = ToolsUtils.getInputByName(step.getInputs(), parameterDescriptor.getName());
+            IInputDescriptor input = DescriptorsUtils.getInputByName(step.getInputs(), parameterDescriptor.getName());
 
             validateMandatory(step, pipeline, commandDescriptor, parameterDescriptor, input);
             validateInputType(pipeline, step, parameterDescriptor, input);
@@ -146,7 +146,7 @@ public class ValidateUtils {
         if (input instanceof IChainInputDescriptor) {
             validateChainInputType(pipeline, paramType, input);
         } else {
-            Object inputValue = ToolsUtils.getInputValue(input, pipeline.getParameters());
+            Object inputValue = DescriptorsUtils.getInputValue(input, pipeline.getParameters());
             validateInput(parameterDescriptor.getName(), paramType, inputValue);
         }
     }
@@ -189,8 +189,8 @@ public class ValidateUtils {
     private static String getOutputTypeFromTool(Pipeline pipeline, IChainInputDescriptor chainInput,
                                                 IStepDescriptor step) throws EngineException {
         IToolsRepository toolsRepository = pipeline.getToolsRepositories().get(step.getExec().getRepositoryId());
-        ICommandDescriptor command = ToolsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) step.getExec());
-        IOutputDescriptor output = ToolsUtils.getOutputFromCommand(command, chainInput.getOutputName());
+        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepository, (ICommandExecDescriptor) step.getExec());
+        IOutputDescriptor output = DescriptorsUtils.getOutputFromCommand(command, chainInput.getOutputName());
         return output.getType();
     }
 
@@ -248,7 +248,7 @@ public class ValidateUtils {
     private static void validateOutputsExistence(Collection<pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor> outputs, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
 
         for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDescriptor : outputs) {
-            IStepDescriptor step = ToolsUtils.getStepById(pipelineDescriptor, outputDescriptor.getStepId());
+            IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDescriptor, outputDescriptor.getStepId());
             IRepositoryDescriptor repository = RepositoryUtils.getRepositoryById(pipelineDescriptor.getRepositories(), step.getExec().getRepositoryId());
             if (repository instanceof IToolRepositoryDescriptor) {
                 validateExistenceOutputOnCommandStep(parameters, outputDescriptor, step, (IToolRepositoryDescriptor) repository);
@@ -277,8 +277,8 @@ public class ValidateUtils {
     private static void validateExistenceOutputOnCommandStep(Map<String, Object> parameters, pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDescriptor, IStepDescriptor step, IToolRepositoryDescriptor repository) throws EngineException {
         IToolsRepository toolsRepository = RepositoryUtils.getToolsRepository(repository, parameters);
         ICommandExecDescriptor commandExecDescriptor = (ICommandExecDescriptor) step.getExec();
-        ICommandDescriptor commandDescriptor = ToolsUtils.getCommand(toolsRepository, commandExecDescriptor);
-        ToolsUtils.getOutputFromCommand(commandDescriptor, outputDescriptor.getOutputName());
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(toolsRepository, commandExecDescriptor);
+        DescriptorsUtils.getOutputFromCommand(commandDescriptor, outputDescriptor.getOutputName());
     }
 
     private static void validateNoDuplicatedOutputsIds(Collection<pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor> outputs) throws EngineException {
@@ -293,8 +293,8 @@ public class ValidateUtils {
 
     private static void validateDependent(IStepDescriptor step, Collection<IParameterDescriptor> parameterDescriptors, IParameterDescriptor parameterDescriptor, IInputDescriptor input, Map<String, Object> parameters) throws EngineException {
         String depends = parameterDescriptor.getDepends();
-        IInputDescriptor inputByName =  ToolsUtils.getInputByName(step.getInputs(), depends);
-        IParameterDescriptor rootParameterDescriptor = ToolsUtils.getParameterById(parameterDescriptors, depends);
+        IInputDescriptor inputByName =  DescriptorsUtils.getInputByName(step.getInputs(), depends);
+        IParameterDescriptor rootParameterDescriptor = DescriptorsUtils.getParameterById(parameterDescriptors, depends);
         if (input != null && (inputByName == null || rootParameterDescriptor == null))
             throw new EngineException("Input: " + parameterDescriptor.getName() + " depends on " + depends +
                     ".No input with name: " + depends + " was found.");
@@ -302,7 +302,7 @@ public class ValidateUtils {
             throw new EngineException("Input: " + parameterDescriptor.getName() + " on step: " + step.getId() + " is required.");
 
         if (!parameterDescriptor.getDependentValues().isEmpty()) {
-            Object rootValue = ToolsUtils.getInputValue(inputByName, parameters);
+            Object rootValue = DescriptorsUtils.getInputValue(inputByName, parameters);
             if (!parameterDescriptor.getDependentValues().contains(rootValue.toString()))
                 throw new EngineException("Input: " + parameterDescriptor.getName() + " depends on " + depends +
                         "but value: " + rootValue + " is not one of its dependent values.");

@@ -5,7 +5,6 @@ import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 
-import java.util.Collection;
 import java.util.Map;
 
 public class Pipeline {
@@ -15,7 +14,7 @@ public class Pipeline {
     private Map<String, IStepDescriptor> steps;
     private Map<String, Object> parameters;
     private IPipelineDescriptor descriptor;
-    private Collection<JobUnit> jobUnits;
+    private Map<String, JobUnit> jobUnits;
 
     public Pipeline(Map<String, IToolsRepository> toolsRepositories, Map<String,
                     IPipelinesRepository> pipelinesRepositories, Map<String, IStepDescriptor> steps,
@@ -29,7 +28,7 @@ public class Pipeline {
 
     public Pipeline(Map<String, IToolsRepository> toolsRepositories, Map<String,
             IPipelinesRepository> pipelinesRepositories, Map<String, IStepDescriptor> steps,
-                    Map<String, Object> parameters, IPipelineDescriptor descriptor, Collection<JobUnit> jobsUnits) {
+                    Map<String, Object> parameters, IPipelineDescriptor descriptor, Map<String, JobUnit> jobsUnits) {
         this(toolsRepositories, pipelinesRepositories, steps, parameters, descriptor);
         this.jobUnits = jobsUnits;
     }
@@ -39,5 +38,5 @@ public class Pipeline {
     public Map<String, IStepDescriptor> getSteps() { return steps; }
     public Map<String, Object> getParameters() { return parameters; }
     public IPipelineDescriptor getDescriptor() { return descriptor; }
-    public Collection<JobUnit> getJobUnits() { return jobUnits; }
+    public Map<String, JobUnit> getJobUnits() { return jobUnits; }
 }

@@ -4,12 +4,12 @@ import pt.isel.ngspipes.engine_core.entities.*;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
 import pt.isel.ngspipes.engine_core.utils.PipelineFactory;
+import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 
 public abstract class Engine implements IEngine {
@@ -40,39 +40,28 @@ public abstract class Engine implements IEngine {
 
 
 
+
+    protected abstract void run(Collection<ExecutionNode> executionGraph, Pipeline pipeline, String executionId);
+
+
+    public void schedule(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
+                         Arguments arguments) throws EngineException {
+
+                Pipeline pipeline = PipelineFactory.create(pipelineDescriptor, parameters);
+                validate(pipeline);
+                pipeline = PipelineFactory.create(pipeline, PipelineFactory.createJobs(pipeline, arguments));
+                Collection<ExecutionNode> executionGraph = topologicalSort(pipeline, arguments.parallel);
+                run(executionGraph, pipeline, executionId);
+    }
+
     protected String generateExecutionId() throws EngineException {
         // gerar um hash até encontrar um que não entre em conflito com as diretorias existentes na working directory
         throw new NotImplementedException();
     }
 
-    protected void schedule(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                            Arguments arguments) throws EngineException {
-        new Thread(() -> {
-            try {
-                Pipeline pipeline = PipelineFactory.create(pipelineDescriptor, parameters);
-                validate(pipeline);
-                pipeline = PipelineFactory.create(pipeline, PipelineFactory.createJobs(pipeline, arguments));
-                List<ExecutionNode> executionGraph = topologicalSort(pipelineDescriptor, arguments.parallel);
-                run(executionGraph, pipeline);
-            } catch (EngineException e) {
-                ExecutionState executionState = states.get(executionId);
-                executionState.setException(e);
-                executionState.setState(StateEnum.FAILED);
-            }
-        }).start();
-    }
 
-    protected void run(List<ExecutionNode> executionGraph, Pipeline pipeline) throws EngineException {
-
-
-
-        throw new NotImplementedException();
-    }
-
-
-
-    protected List<ExecutionNode> topologicalSort(IPipelineDescriptor pipelineDescriptor, boolean parallel) throws EngineException {
-        throw new NotImplementedException();
+    protected Collection<ExecutionNode> topologicalSort(Pipeline pipeline, boolean parallel) throws EngineException {
+        return parallel ? TopologicSorter.parallelSort(pipeline) : TopologicSorter.sequentialSort(pipeline);
     }
 
     protected void validate(Pipeline pipeline) throws EngineException {
@@ -82,6 +71,5 @@ public abstract class Engine implements IEngine {
         ValidateUtils.validateSteps(pipeline);
         ValidateUtils.validateNonCyclePipeline(pipeline);
     }
-
 
 }
