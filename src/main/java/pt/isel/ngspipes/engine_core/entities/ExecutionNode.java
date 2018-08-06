@@ -1,29 +1,31 @@
 package pt.isel.ngspipes.engine_core.entities;
 
+import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
+
 import java.util.LinkedList;
 import java.util.List;
 
 public class ExecutionNode {
 
-    JobUnit job;
+    StepContext stepContext;
     List<ExecutionNode> childs;
 
-    public JobUnit getJob() { return job; }
+    public StepContext getStepContext() { return stepContext; }
     public List<ExecutionNode> getChilds() { return childs; }
 
-    public ExecutionNode(JobUnit job, List<ExecutionNode> childs) {
-        this.job = job;
+    public ExecutionNode(StepContext stepContext, List<ExecutionNode> childs) {
+        this.stepContext = stepContext;
         this.childs = childs;
     }
 
-    public ExecutionNode(JobUnit job) {
-        this(job, new LinkedList<>());
+    public ExecutionNode(StepContext stepContext) {
+        this(stepContext, new LinkedList<>());
     }
 
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof ExecutionNode)
-            return job.id.equals(((ExecutionNode) obj).job.id);
+            return stepContext.getId().equals(((ExecutionNode) obj).getStepContext().getId());
         return super.equals(obj);
     }
 }

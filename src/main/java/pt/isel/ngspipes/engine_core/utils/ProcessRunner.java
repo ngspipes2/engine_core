@@ -1,65 +1,93 @@
 package pt.isel.ngspipes.engine_core.utils;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import org.apache.log4j.Logger;
+import pt.isel.ngspipes.engine_core.exception.EngineException;
+import pt.isel.ngspipes.engine_core.exception.ProgressReporterException;
+import pt.isel.ngspipes.engine_core.executionReporter.IExecutionProgressReporter;
+
+import java.io.*;
 import java.nio.charset.Charset;
 
 public class ProcessRunner {
+
+    private static final Logger logger = Logger.getLogger(ProcessRunner.class);
+
+    private static class ExceptionBox{
+        Exception ex;
+    }
 
     @FunctionalInterface
     private interface LogLambda {
         void log() throws Exception;
     }
 
-    protected static void logStream(InputStream in) throws IOException {
-        BufferedReader bf = new BufferedReader(new InputStreamReader(in, Charset.forName("UTF-8")));
+    @FunctionalInterface
+    private interface InternalReporter {
+        void report(String msg) throws ProgressReporterException;
+    }
+
+    private static void logStream(InputStream in, InternalReporter reporter) throws IOException, ProgressReporterException {
 
         String line;
         StringBuilder sb = new StringBuilder();
 
-        try{
-            while((line=bf.readLine()) != null){
+        try (BufferedReader bf = new BufferedReader(new InputStreamReader(in, Charset.forName("UTF-8")))) {
+            while ((line = bf.readLine()) != null) {
                 sb.append(line).append("\n");
-                System.out.println(line);
+                reporter.report(line);
             }
-        }finally{
-            if(sb.length() != 0)
-                System.out.println(sb.toString());
+        } finally {
+            if (sb.length() != 0)
+                logger.error(sb.toString());
 
-            bf.close();
         }
     }
 
-    public static void run(String command) throws IOException {
+    public static void run(String command, String workingDirectory, IExecutionProgressReporter reporter) throws EngineException {
+        ExceptionBox inputBox = new ExceptionBox();
+        ExceptionBox errorBox = new ExceptionBox();
+        Process p;
 
-        //Ignoring IOExceptions from logStream(InputStream in)
-        int exitCode = 0;
-        try {
+        try{
 
-            Process p = Runtime.getRuntime().exec(command);
+            logger.trace("Executing command: " + command);
+            if (workingDirectory != null && !workingDirectory.isEmpty())
+                p = Runtime.getRuntime().exec(command, null, new File(workingDirectory));
+            else
+                p = Runtime.getRuntime().exec(command);
 
-            Thread inputThread = createThread(() -> logStream(p.getInputStream()));
-            Thread errorThread = createThread(() -> logStream(p.getErrorStream()));
+            Thread inputThread = createThread(()->logStream(p.getInputStream(), reporter::reportInfo), inputBox);
+            Thread errorThread = createThread(()->logStream(p.getErrorStream(), reporter::reportInfo), errorBox);
 
             inputThread.join();
             errorThread.join();
-
-            exitCode = p.waitFor();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e.getMessage());
+        }catch(Exception ex){
+            try {
+                reporter.reportInfo(ex.getMessage());
+            } catch (ProgressReporterException e) {
+                e.printStackTrace();
+            }
+            throw new EngineException("Error executing command " + command, ex);
         }
-        String message = "Finished with Exit Code = " + exitCode;
-        System.out.println(message);
+
+        //Ignoring IOExceptions from logStream(InputStream in)
+        try {
+            int exitCode = p.waitFor();
+
+            String message = "Command " + command + " finished with Exit Code = " + exitCode;
+            logger.trace(message);
+            reporter.reportInfo(message);
+        } catch (Exception ex) {
+            throw new EngineException("Error executing command " + command, ex);
+        }
     }
 
-    private static Thread createThread(LogLambda action) {
+    private static Thread createThread(LogLambda action,  ExceptionBox box) {
         Thread t = new Thread( () -> {
             try {
                 action.log();
             } catch(Exception e) {
-                throw new RuntimeException(e.getMessage());
+                box.ex = e;
             }
         });
 

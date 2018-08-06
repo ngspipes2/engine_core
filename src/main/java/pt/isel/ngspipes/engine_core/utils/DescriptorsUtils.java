@@ -1,20 +1,23 @@
 package pt.isel.ngspipes.engine_core.utils;
 
+import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.repository.value.IParameterValueDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.repository.value.ISimpleValueDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.repository.value.IValueDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IParameterInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.ISimpleInputDescriptor;
 import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
 import pt.isel.ngspipes.pipeline_repository.PipelinesRepositoryException;
-import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
-import pt.isel.ngspipes.tool_descriptor.interfaces.IOutputDescriptor;
-import pt.isel.ngspipes.tool_descriptor.interfaces.IParameterDescriptor;
-import pt.isel.ngspipes.tool_descriptor.interfaces.IToolDescriptor;
+import pt.isel.ngspipes.tool_descriptor.interfaces.*;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 import utils.ToolsRepositoryException;
 
@@ -23,6 +26,13 @@ import java.util.Map;
 
 public class DescriptorsUtils {
 
+    public static IToolDescriptor getTool(IToolsRepository repo, String toolName, String stepId) throws EngineException {
+        try {
+            return repo.get(toolName);
+        } catch (ToolsRepositoryException e) {
+            throw new EngineException("Erro getting tool for step " + stepId, e);
+        }
+    }
 
     public static ICommandDescriptor getCommand(IToolsRepository toolsRepository, ICommandExecDescriptor commandExecDescriptor) throws EngineException {
 
@@ -48,14 +58,6 @@ public class DescriptorsUtils {
         }
 
         return null;
-    }
-
-    public static IStepDescriptor getStepById(IPipelineDescriptor pipelineDescriptor, String stepId) throws EngineException {
-
-        for (IStepDescriptor step : pipelineDescriptor.getSteps())
-            if (step.getId().equals(stepId))
-                return step;
-        throw new EngineException("No step was found for id: " + stepId);
     }
 
     public static IOutputDescriptor getOutputFromCommand(ICommandDescriptor commandDescriptor, String outputName) throws EngineException {
@@ -93,24 +95,18 @@ public class DescriptorsUtils {
         throw new EngineException("No implementation exist to get the input: " + input.getInputName() + " value");
     }
 
-    public static int getMemFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
-        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
-        return command.getRecommendedMemory();
-    }
+    public static Object getInputValue(IInputDescriptor input, PipelineContext pipelineContext) throws EngineException {
+        if (input instanceof IChainInputDescriptor) {
+            IChainInputDescriptor chainInputDesc = (IChainInputDescriptor) input;
+            StepContext stepContext = pipelineContext.getStepsContexts().get(chainInputDesc.getStepId());
 
-    public static int getCpusFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
-        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
-        return command.getRecommendedCpu();
-    }
-
-    public static int getDiskFromCommand(IToolsRepository toolsRepo, IExecDescriptor exec) throws EngineException {
-        ICommandDescriptor command = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) exec);
-        return command.getRecommendedDisk();
+            return stepContext.getOutputs().get(chainInputDesc.getOutputName());
+        } else
+            return getInputValue(input, pipelineContext.getParameters());
     }
 
     public static IPipelineDescriptor getPipelineDescriptor(IPipelineExecDescriptor exec, String stepId,
                                                             IPipelinesRepository pipelinesRepo) throws EngineException {
-        IPipelineDescriptor pipelineDesc;
         try {
             String pipelineName = exec.getPipelineName();
             return pipelinesRepo.get(pipelineName);
@@ -118,5 +114,23 @@ public class DescriptorsUtils {
         } catch (PipelinesRepositoryException e) {
             throw new EngineException("Error loading pipeline step" + stepId + ".", e);
         }
+    }
+
+    public static IExecutionContextDescriptor getExecutionContext(Collection<IExecutionContextDescriptor> execCtxs,
+                                                                  IValueDescriptor exec, Map<String, Object> params) {
+
+        String execName = getExecutionContextName(exec, params);
+        for (IExecutionContextDescriptor execCtx : execCtxs)
+            if (execCtx.getName().equalsIgnoreCase(execName))
+                return execCtx;
+        return null;
+    }
+
+    private static String getExecutionContextName(IValueDescriptor exec, Map<String, Object> params) {
+        if (exec instanceof ISimpleValueDescriptor)
+            return ((ISimpleValueDescriptor) exec).getValue().toString();
+        if (exec instanceof IParameterValueDescriptor)
+            return params.get(((IParameterValueDescriptor) exec).getParameterName()).toString();
+        return null;
     }
 }

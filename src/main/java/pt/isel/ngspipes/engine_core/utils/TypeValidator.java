@@ -27,6 +27,8 @@ public class TypeValidator {
         VALIDATORS.put("flag", TypeValidator::validateFlag);
         VALIDATORS.put("file", TypeValidator::validateFile);
         VALIDATORS.put("directory", TypeValidator::validateDirectory);
+        VALIDATORS.put("compose", TypeValidator::validateDummy);
+        VALIDATORS.put("enum", TypeValidator::validateDummy);
         VALIDATORS.put("string[]", TypeValidator::validateStringArray);
         VALIDATORS.put("int[]", TypeValidator::validateIntArray);
         VALIDATORS.put("float[]", TypeValidator::validateFloatArray);
@@ -89,6 +91,8 @@ public class TypeValidator {
             throw new InputValidationException("Value " +  value + " is not a valid path for a directory.", ex);
         }
     }
+
+    private static void validateDummy(Object value) { }
 
     private static void validateFile(Object value) throws InputValidationException {
         File file = new File(value.toString());

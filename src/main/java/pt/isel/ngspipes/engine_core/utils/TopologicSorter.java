@@ -1,18 +1,19 @@
 package pt.isel.ngspipes.engine_core.utils;
 
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
-import pt.isel.ngspipes.engine_core.entities.JobUnit;
-import pt.isel.ngspipes.engine_core.entities.Pipeline;
+import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.ChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class TopologicSorter {
 
-    public static Collection<ExecutionNode> parallelSort(Pipeline pipeline) {
-        Collection<IStepDescriptor> steps = pipeline.getSteps().values();
+    public static Collection<ExecutionNode> parallelSort(PipelineContext pipeline) {
+        Collection<IStepDescriptor> steps = getSteps(pipeline.getStepsContexts());
         Map<String, Collection<IStepDescriptor>> chainsFrom = getChainFrom(steps);
         Map<String, Collection<IStepDescriptor>> chainsTo = getChainTo(steps);
         Map<String, Collection<IStepDescriptor>> chainsToCpy = getChainTo(steps);
@@ -23,7 +24,7 @@ public class TopologicSorter {
             IStepDescriptor root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
-                addJobUnitParents(graph, chainsToCpy, pipeline);
+                addStepParents(graph, chainsToCpy, pipeline);
                 return graph;
             }
 
@@ -34,16 +35,16 @@ public class TopologicSorter {
                 if(chainsTo.get(step.getId()).isEmpty()) {
                     roots.add(0, step);
                 }
-                addToGraphIfAbsent(graph, pipeline.getJobUnits().get(root.getId()),
-                                    pipeline.getJobUnits().get(step.getId()));
+                addToGraphIfAbsent(graph, pipeline.getStepsContexts().get(root.getId()),
+                                    pipeline.getStepsContexts().get(step.getId()));
             }
         }
-        addJobUnitParents(graph, chainsTo, pipeline);
+        addStepParents(graph, chainsTo, pipeline);
         return graph;
     }
 
-    public static Collection<ExecutionNode> sequentialSort(Pipeline pipeline) {
-        Collection<IStepDescriptor> steps = pipeline.getSteps().values();
+    public static Collection<ExecutionNode> sequentialSort(PipelineContext pipeline) {
+        Collection<IStepDescriptor> steps = getSteps(pipeline.getStepsContexts());
         Map<String, Collection<IStepDescriptor>> chainsFrom = getChainFrom(steps);
         Map<String, Collection<IStepDescriptor>> chainsTo = getChainTo(steps);
         List<IStepDescriptor> roots = getRoots(steps);
@@ -53,67 +54,79 @@ public class TopologicSorter {
             IStepDescriptor root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
-                addJobUnitParents(orderedSteps);
+                addStepParents(orderedSteps);
                 return orderedSteps;
             }
 
             for(IStepDescriptor step : chainsFrom.get(root.getId())){
-                if(chainsTo.containsKey(step.getId()))
-                    chainsTo.get(step.getId()).remove(root);
+                String id = step.getId();
+                if(chainsTo.containsKey(id))
+                    chainsTo.get(id).remove(root);
 
-                if(chainsTo.get(step.getId()).isEmpty()) {
+                if(chainsTo.get(id).isEmpty()) {
                     roots.add(0, step);
-                    JobUnit jobUnit = pipeline.getJobUnits().get(step.getId());
-                    if(!orderedSteps.contains(jobUnit))
-                        orderedSteps.add(new ExecutionNode(jobUnit));
+                    StepContext stepContext = pipeline.getStepsContexts().get(id);
+                    if(notContainsNode(stepContext, orderedSteps)) {
+                        orderedSteps.add(new ExecutionNode(stepContext));
+                    }
                 }
             }
         }
 
-        addJobUnitParents(orderedSteps);
+        addStepParents(orderedSteps);
         return orderedSteps;
     }
 
-    private static void addJobUnitParents(List<ExecutionNode> orderedSteps) {
+
+
+    private static Collection<IStepDescriptor> getSteps(Map<String, StepContext> stepsContexts) {
+        Collection<IStepDescriptor> steps = new LinkedList<>();
+
+        for (Map.Entry<String, StepContext> stepCtx : stepsContexts.entrySet())
+            steps.add(stepCtx.getValue().getStep());
+
+        return steps;
+    }
+
+    private static void addStepParents(List<ExecutionNode> orderedSteps) {
 
         for (int idx = orderedSteps.size() - 1; idx > 0; idx--) {
-            LinkedList<JobUnit> parents = new LinkedList<>();
-            parents.add(orderedSteps.get(idx-1).getJob());
-            orderedSteps.get(idx).getJob().setParents(parents);
+            LinkedList<StepContext> parents = new LinkedList<>();
+            parents.add(orderedSteps.get(idx-1).getStepContext());
+            orderedSteps.get(idx).getStepContext().getParents().addAll(parents);
         }
     }
 
-    private static void addJobUnitParents(Collection<ExecutionNode> graph,
-                                          Map<String, Collection<IStepDescriptor>> chainsTo, Pipeline pipeline) {
+    private static void addStepParents(Collection<ExecutionNode> graph, Map<String, Collection<IStepDescriptor>> chainsTo, PipelineContext pipeline) {
         for (ExecutionNode node : graph) {
-            getParents(chainsTo, pipeline, node);
+            getParents(chainsTo, node, pipeline);
         }
     }
 
-    private static void getParents(Map<String, Collection<IStepDescriptor>> chainsTo, Pipeline pipeline, ExecutionNode node) {
+    private static void getParents(Map<String, Collection<IStepDescriptor>> chainsTo, ExecutionNode node, PipelineContext pipeline) {
         for (ExecutionNode child : node.getChilds()) {
-            Collection<JobUnit> parents = new LinkedList<>();
-            String jobId = child.getJob().getId();
-            parents.addAll(getParents(chainsTo.get(jobId), pipeline));
-            child.getJob().setParents(parents);
-            getParents(chainsTo, pipeline, child);
+            String stepId = child.getStepContext().getId();
+            if (chainsTo.containsKey(stepId)) {
+                Collection<StepContext> parents = new LinkedList<>();
+                parents.addAll(getParents(chainsTo.get(stepId), pipeline));
+                child.getStepContext().getParents().addAll(parents);
+                chainsTo.remove(stepId);
+            }
+
+            getParents(chainsTo, child, pipeline);
         }
     }
 
-    private static Collection<JobUnit> getParents(Collection<IStepDescriptor> stepDescs, Pipeline pipeline) {
-        Collection<JobUnit> parents = new LinkedList<>();
-
-        for (IStepDescriptor step : stepDescs) {
-            parents.add(pipeline.getJobUnits().get(step.getId()));
-        }
-
-        return parents;
+    private static Collection<StepContext> getParents(Collection<IStepDescriptor> stepDescs, PipelineContext pipeline) {
+        return stepDescs.stream()
+                .map((s) -> pipeline.getStepsContexts().get(s.getId()))
+                .collect(Collectors.toList());
     }
 
-    private static void addToGraphIfAbsent(Collection<ExecutionNode> graph, JobUnit root, JobUnit child) {
+    private static void addToGraphIfAbsent(Collection<ExecutionNode> graph, StepContext root, StepContext child) {
         for (ExecutionNode executionNode : graph) {
-            if (executionNode.getJob().equals(root)) {
-                if (!executionNode.getChilds().contains(child))
+            if (executionNode.getStepContext().equals(root)) {
+                if (notContainsNode(child, executionNode.getChilds()))
                     executionNode.getChilds().add(new ExecutionNode(child));
             } else {
                 addToGraphIfAbsent(executionNode.getChilds(), root, child);
@@ -121,11 +134,16 @@ public class TopologicSorter {
         }
     }
 
-    private static Collection<ExecutionNode> getRootJobs(Pipeline pipeline, List<IStepDescriptor> roots) {
+    private static boolean notContainsNode(StepContext child, Collection<ExecutionNode> graph) {
+        return graph.stream()
+                    .noneMatch((e) -> e.getStepContext().equals(child));
+    }
+
+    private static Collection<ExecutionNode> getRootJobs(PipelineContext pipeline, List<IStepDescriptor> roots) {
         Collection<ExecutionNode> executionNodes = new LinkedList<>();
 
         for (IStepDescriptor step : roots) {
-            ExecutionNode executionNode = new ExecutionNode(pipeline.getJobUnits().get(step.getId()));
+            ExecutionNode executionNode = new ExecutionNode(pipeline.getStepsContexts().get(step.getId()));
             executionNodes.add(executionNode);
         }
 
@@ -153,8 +171,7 @@ public class TopologicSorter {
                 if (chainInputs.isEmpty())
                     continue;
                 if(isChainStep(step.getId(), chainInputs)) {
-                    if (chainTo.get(stepName) == null)
-                        chainTo.put(stepName, new LinkedList<>());
+                    chainTo.computeIfAbsent(stepName, k -> new LinkedList<>());
                     chainTo.get(stepName).add(step);
                 }
             }
@@ -173,8 +190,7 @@ public class TopologicSorter {
                 if (chainInputs.isEmpty())
                     continue;
                 if(isChainStep(stepName, chainInputs)) {
-                    if (chainFrom.get(stepName) == null)
-                        chainFrom.put(stepName, new LinkedList<>());
+                    chainFrom.computeIfAbsent(stepName, k -> new LinkedList<>());
                     chainFrom.get(stepName).add(stepInside);
                 }
             }

@@ -1,75 +1,121 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import pt.isel.ngspipes.engine_core.entities.*;
+import org.apache.log4j.Appender;
+import org.apache.log4j.FileAppender;
+import org.apache.log4j.Logger;
+import org.apache.log4j.spi.AppenderAttachable;
+import pt.isel.ngspipes.engine_core.entities.Arguments;
+import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
+import pt.isel.ngspipes.engine_core.entities.ExecutionState;
+import pt.isel.ngspipes.engine_core.entities.StateEnum;
+import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
-import pt.isel.ngspipes.engine_core.utils.PipelineFactory;
+import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
+import pt.isel.ngspipes.engine_core.utils.ContextFactory;
+import pt.isel.ngspipes.engine_core.utils.LoggerUtils;
 import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
-import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
+import java.io.File;
+import java.util.Calendar;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 
 public abstract class Engine implements IEngine {
 
+    final Logger logger;
 
-    protected String workingDirectory;
-    protected Map<String, ExecutionState> states;
+    String workingDirectory;
+    final Map<String, PipelineContext> pipelines = new HashMap<>();
 
-    public Engine(String workingDirectory) {
+    Engine(String workingDirectory) {
         this.workingDirectory = workingDirectory;
+        String engine_log = File.separatorChar + "engine_log.log";
+        LoggerUtils.initLogger(workingDirectory + engine_log);
+        logger = Logger.getLogger(Engine.class);
     }
 
     @Override
-    public String execute(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters, Arguments arguments) throws EngineException {
-        String id = generateExecutionId();
-        states.put(id, new ExecutionState());
-        schedule(id, pipelineDescriptor, parameters, arguments);
-        return id;
-    }
-
-    @Override
-    public ExecutionState getState(String executionId) throws EngineException {
-        if(states.containsKey(executionId))
-            return states.get(executionId);
-
-        throw new EngineException("No execution state found for: " + executionId);
+    public PipelineContext execute(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
+                          Arguments arguments) throws EngineException {
+        String id = generateExecutionId(pipelineDescriptor.getName());
+        PipelineContext pipeline = createPipelineContext(pipelineDescriptor, parameters, arguments, id);
+        initState(pipeline);
+        registerPipeline(pipeline);
+        executePipeline(arguments.parallel, pipeline);
+        return pipeline;
     }
 
 
+    protected abstract void stage(PipelineContext pipeline) throws EngineException;
 
-
-    protected abstract void run(Collection<ExecutionNode> executionGraph, Pipeline pipeline, String executionId);
-
-
-    public void schedule(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                         Arguments arguments) throws EngineException {
-
-                Pipeline pipeline = PipelineFactory.create(pipelineDescriptor, parameters);
-                validate(pipeline);
-                pipeline = PipelineFactory.create(pipeline, PipelineFactory.createJobs(pipeline, arguments));
-                Collection<ExecutionNode> executionGraph = topologicalSort(pipeline, arguments.parallel);
-                run(executionGraph, pipeline, executionId);
-    }
-
-    protected String generateExecutionId() throws EngineException {
-        // gerar um hash até encontrar um que não entre em conflito com as diretorias existentes na working directory
-        throw new NotImplementedException();
+    void executeSubPipeline(String stepId, PipelineContext pipeline) throws EngineException {
+        PipelineContext subPipeline = ContextFactory.create(stepId, pipeline);
+        execute(subPipeline, true);
     }
 
 
-    protected Collection<ExecutionNode> topologicalSort(Pipeline pipeline, boolean parallel) throws EngineException {
+
+    private PipelineContext createPipelineContext(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters, Arguments arguments, String id) throws EngineException {
+        String pipelineWorkingDirectory = getPipelineWorkingDirectory(id);
+        return ContextFactory.create(id, pipelineDescriptor, parameters,
+        arguments, pipelineWorkingDirectory);
+    }
+
+    private void registerPipeline(PipelineContext pipeline) {
+        pipelines.put(pipeline.getExecutionId(), pipeline);
+    }
+
+    private void initState(PipelineContext pipeline) {
+        ExecutionState state = new ExecutionState();
+        state.setState(StateEnum.STAGING);
+        pipeline.setState(state);
+    }
+
+    private void executePipeline(boolean parallel, PipelineContext pipeline) {
+        TaskFactory.createAndExecuteTask(() -> {
+            try {
+                execute(pipeline, parallel);
+            } catch (EngineException e) {
+                ExecutionState executionState = new ExecutionState(StateEnum.FAILED, e);
+                pipeline.setState(executionState);
+                logger.error("Pipeline " + pipeline.getExecutionId(), e);
+            }
+        });
+    }
+
+    private void execute(PipelineContext pipeline, boolean parallel) throws EngineException {
+        validate(pipeline);
+        Collection<ExecutionNode> executionGraph = topologicalSort(pipeline, parallel);
+        pipeline.setPipelineGraph(executionGraph);
+        stage(pipeline);
+    }
+
+    private String generateExecutionId(String pipelineName) {
+        String pipelineNameID = pipelineName == null || pipelineName.isEmpty() ? "" : pipelineName;
+        String currTime = Calendar.getInstance().getTimeInMillis() + "";
+        return pipelineNameID + "_" + currTime;
+    }
+
+
+    private Collection<ExecutionNode> topologicalSort(PipelineContext pipeline, boolean parallel) {
         return parallel ? TopologicSorter.parallelSort(pipeline) : TopologicSorter.sequentialSort(pipeline);
     }
 
-    protected void validate(Pipeline pipeline) throws EngineException {
+    private void validate(PipelineContext pipeline) throws EngineException {
         IPipelineDescriptor pipelineDescriptor = pipeline.getDescriptor();
         ValidateUtils.validateRepositories(pipelineDescriptor.getRepositories());
-        ValidateUtils.validateOutputs(pipelineDescriptor.getOutputs(), pipelineDescriptor, pipeline.getParameters());
+        ValidateUtils.validateOutputs(pipeline);
         ValidateUtils.validateSteps(pipeline);
         ValidateUtils.validateNonCyclePipeline(pipeline);
+    }
+
+    private String getPipelineWorkingDirectory(String executionId) {
+        String workDirectory = this.workingDirectory + File.separatorChar + executionId;
+        return workDirectory.replace(" ", "");
     }
 
 }
