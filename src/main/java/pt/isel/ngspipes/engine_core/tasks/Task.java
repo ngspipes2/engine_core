@@ -54,12 +54,17 @@ public abstract class Task<T> implements Runnable, Future<T> {
     @Override
     public void run() {
         try {
+            if (this.getStatus().equals(TaskStatus.SUCCEEDED)) {
+                return;
+            }
+
             if(cancelledEvent.hasFired()) {
                 this.setStatus(TaskStatus.CANCELED);
                 return;
             }
 
             runningEvent.fire();
+            this.setStatus(TaskStatus.RUNNING);
 
             if(cancelledEvent.hasFired()) {
                 this.setStatus(TaskStatus.CANCELED);
@@ -74,9 +79,11 @@ public abstract class Task<T> implements Runnable, Future<T> {
             }
 
             succeededEvent.fire();
+            this.setStatus(TaskStatus.SUCCEEDED);
         } catch(Exception e) {
             this.setException(e);
             failedEvent.fire();
+            this.setStatus(TaskStatus.FAILED);
         } finally {
             finishedEvent.fire();
         }
@@ -154,6 +161,12 @@ public abstract class Task<T> implements Runnable, Future<T> {
             }
         };
 
+        this.finishedEvent.addListener(() -> execute(task));
+
+        return task;
+    }
+
+    public <R> Task<R> then(Task<R> task) {
         this.finishedEvent.addListener(() -> execute(task));
 
         return task;

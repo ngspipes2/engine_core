@@ -7,7 +7,7 @@ Properties: {
 
 Repositories: [
     ToolRepository repo: {
-        location: "E:/Work/NGSPipes/ngspipes2/main/engine/engine_core/src/test/resources/tools_support"
+        location: "E:\Work\NGSPipes\ngspipes2\main\engine\engine_core\src\test\resources\tools_support"
     }
 ]
 
@@ -23,17 +23,17 @@ Steps: [
         inputs: {
             mode: "SE"
             quality: "phred33"
-            inputFile: "ERR406040.fastq"
-            outputFile: "ERR406040.filtered.fastq"
-            fastaWithAdaptersEtc: "TruSeq3-SE.fa"
-            seed_mismatches: 2
-            palindrome_clip_threshold: 30
-            simple_clip_threshold: 10
+            inputFile1: "E:\Desktop\NGSPipesTeam\Demo\Inputs\caseStudy1Minimal\ERR406040.fastq"
+            output: "ERR406040.filtered.fastq"
+            fastaWithAdaptersEtc: "E:\Desktop\NGSPipesTeam\Demo\Inputs\caseStudy1Minimal\TruSeq3-SE.fa"
+            seedMismatches: 2
+            palindromeClipThreshold: 30
+            simpleClipThreshold: 10
             windowSize: 4
             requiredQuality: 15
-            leading_quality: 3
-            trailing_quality: 3
-            minlen_length: 36
+            leadingQuality: 3
+            trailingQuality: 3
+            minlenLength: 36
         }
     }
     Step blastx: {
@@ -41,7 +41,7 @@ Steps: [
         execution_context: "DockerConfig"
         inputs: {
             db: makeblastdb[outFile]
-            query: velvetg[contigs_fa]
+            query: velvetg[contigsFa]
             out: params.blastx_out
         }
     }
@@ -49,9 +49,9 @@ Steps: [
         exec: repo[Velvet][velveth]
         execution_context: "DockerConfig"
         inputs: {
-            output_directory: "velvetdir"
-            hash_length: 21
-            file_format: "fastq"
+            outputDirectory: "velvetdir"
+            hashLength: 21
+            fileFormat: "fastq"
             filename: trimmomatic[outputFile]
         }
     }
@@ -59,8 +59,8 @@ Steps: [
         exec: repo[Velvet][velvetg]
         execution_context: "DockerConfig"
         inputs: {
-            output_directory: velveth[out_dir]
-            cov_cutoff: 5
+            outputDirectory: velveth[outDir]
+            covCutoff: 5
         }
     }
     Step makeblastdb: {
@@ -70,7 +70,7 @@ Steps: [
             dbtype: "prot"
             out: "allrefs"
             title: "allrefs"
-            in: "allrefs.fna.pro"
+            in: "E:\Desktop\NGSPipesTeam\Demo\Inputs\caseStudy1Minimal\allrefs.fna.pro"
         }
     }
 ]

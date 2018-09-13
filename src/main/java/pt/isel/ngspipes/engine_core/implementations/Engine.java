@@ -1,9 +1,7 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import org.apache.log4j.Appender;
-import org.apache.log4j.FileAppender;
 import org.apache.log4j.Logger;
-import org.apache.log4j.spi.AppenderAttachable;
+import org.apache.log4j.LogManager;
 import pt.isel.ngspipes.engine_core.entities.Arguments;
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_core.entities.ExecutionState;
@@ -13,7 +11,6 @@ import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
 import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.ContextFactory;
-import pt.isel.ngspipes.engine_core.utils.LoggerUtils;
 import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
@@ -26,16 +23,13 @@ import java.util.Map;
 
 public abstract class Engine implements IEngine {
 
-    final Logger logger;
-
+    Logger logger;
     String workingDirectory;
     final Map<String, PipelineContext> pipelines = new HashMap<>();
 
     Engine(String workingDirectory) {
         this.workingDirectory = workingDirectory;
-        String engine_log = File.separatorChar + "engine_log.log";
-        LoggerUtils.initLogger(workingDirectory + engine_log);
-        logger = Logger.getLogger(Engine.class);
+        logger = LogManager.getLogger(Engine.class.getName());
     }
 
     @Override
@@ -56,7 +50,6 @@ public abstract class Engine implements IEngine {
         PipelineContext subPipeline = ContextFactory.create(stepId, pipeline);
         execute(subPipeline, true);
     }
-
 
 
     private PipelineContext createPipelineContext(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters, Arguments arguments, String id) throws EngineException {

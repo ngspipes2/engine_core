@@ -4,10 +4,7 @@ import pt.isel.ngspipes.engine_core.commandBuilders.ICommandBuilder;
 import pt.isel.ngspipes.engine_core.entities.Arguments;
 import pt.isel.ngspipes.engine_core.entities.Environment;
 import pt.isel.ngspipes.engine_core.entities.PipelineEnvironment;
-import pt.isel.ngspipes.engine_core.entities.contexts.ComposeStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.SimpleStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IPipelineRepositoryDescriptor;
@@ -52,18 +49,17 @@ public class ContextFactory {
                 arguments, workingDirectory);
     }
 
-    public static String getOutputValue(IOutputDescriptor outputDescriptor, StepContext stepCtx,
-                                         PipelineContext pipeline) throws EngineException {
-        String outputsDirectory = stepCtx.getEnvironment().getOutputsDirectory();
-        if (outputDescriptor.getValue().contains("$")) {
-            return outputsDirectory + File.separatorChar + getDependentOutputValue(stepCtx.getStep().getInputs(), outputDescriptor, pipeline);
-        }
+    public static InOutContext getOutputValue(IOutputDescriptor outputDescriptor, StepContext stepCtx,
+                                              PipelineContext pipeline) throws EngineException {
+        Object outputValue;
+        if (outputDescriptor.getValue().contains("$"))
+            outputValue = getDependentOutputValue(stepCtx, outputDescriptor, pipeline);
         else
-            return outputsDirectory + File.separatorChar + getOutputValue(outputDescriptor.getName(), stepCtx, pipeline);
+            outputValue = getDependentOutputValue(stepCtx, outputDescriptor, pipeline);
+        return new InOutContext(outputDescriptor.getName(), stepCtx.getId(), outputDescriptor.getType(), outputValue);
     }
 
     public static String getInputValue(IInputDescriptor inputDescriptor, PipelineContext pipeline) throws EngineException {
-
         if (inputDescriptor instanceof IParameterInputDescriptor) {
             return getParameterInputValue(inputDescriptor, pipeline.getParameters());
         } else if (inputDescriptor instanceof ISimpleInputDescriptor) {
@@ -325,14 +321,6 @@ public class ContextFactory {
         return highest;
     }
 
-   private static String getInputValue(Collection<IInputDescriptor> inputs, String inputName,
-                                        PipelineContext pipeline) throws EngineException {
-        for (IInputDescriptor input : inputs)
-            if (inputName.equals(input.getInputName()))
-                return getInputValue(input, pipeline);
-        return "";
-    }
-
     private static Collection<String> getInputs(PipelineContext pipeline, StepContext stepCtx) throws EngineException {
         Collection<String> inputs = new LinkedList<>();
 
@@ -345,7 +333,8 @@ public class ContextFactory {
     // NÃO ESTOU A TER EM CONTA QUE OS INPUTS CHAIN POSSAM SER OUTPUTS DEPENDENTES DE INPUTS
     private static String getChainInputValue(IChainInputDescriptor chainInput, PipelineContext pipeline) throws EngineException {
         StepContext stepCtx = pipeline.getStepsContexts().get(chainInput.getStepId());
-        return getOutputValue(chainInput.getOutputName(), stepCtx, pipeline);
+        Object value = getOutputValue(chainInput.getOutputName(), stepCtx, pipeline);
+        return value.toString();
     }
 
     private static String getSimpleInputValue(ISimpleInputDescriptor inputDescriptor) {
@@ -362,7 +351,7 @@ public class ContextFactory {
         return inputValue.toString();
     }
 
-    private static String getDependentOutputValue(Collection<IInputDescriptor> inputs, IOutputDescriptor outputDescriptor,
+    private static Object getDependentOutputValue(StepContext stepCtx, IOutputDescriptor outputDescriptor,
                                                   PipelineContext pipeline) throws EngineException {
         String outputValue = outputDescriptor.getValue();
         StringBuilder value = new StringBuilder();
@@ -370,11 +359,11 @@ public class ContextFactory {
         if (outputValue.indexOf("$") != outputValue.lastIndexOf("$")) {
             String[] splittedByDependency = outputValue.split("$");
             for (String str : splittedByDependency) {
-                value.append(getDependentOutputValue(inputs, pipeline, str));
+                value.append(getDependentOutputValue(stepCtx, pipeline, str));
             }
         } else {
             String val = outputValue.substring(outputValue.indexOf("$") + 1);
-            String inputValue = getDependentOutputValue(inputs, pipeline, val);
+            String inputValue = getDependentOutputValue(stepCtx, pipeline, val);
             value.append(inputValue);
         }
 
@@ -383,13 +372,15 @@ public class ContextFactory {
         return value.toString();
     }
 
-    private static String getDependentOutputValue(Collection<IInputDescriptor> inputs, PipelineContext pipeline, String output) throws EngineException {
+    private static String getDependentOutputValue(StepContext stepCtx, PipelineContext pipeline, String output) throws EngineException {
 
-        Collection <IInputDescriptor> orderedInputs = orderInputsByNameLength(inputs);
+        Collection <IInputDescriptor> orderedInputs = orderInputsByNameLength(stepCtx.getStep().getInputs());
 
         for (IInputDescriptor input : orderedInputs)
-            if (output.contains(input.getInputName()))
-                return output.replace(input.getInputName(), getInputValue(input, pipeline));
+            if (output.contains(input.getInputName())) {
+                String inputValue = getInputValue(input, pipeline);
+                return output.replace(input.getInputName(), inputValue);
+            }
 
         return "";
     }
@@ -403,17 +394,19 @@ public class ContextFactory {
         return orderedInputs;
     }
 
-    private static String getOutputValue(String outputName, StepContext stepCtx, PipelineContext pipeline) throws EngineException {
+    private static AbstractMap.SimpleEntry<String, Object> getOutputValue(String outputName, StepContext stepCtx, PipelineContext pipeline) throws EngineException {
         if(stepCtx instanceof SimpleStepContext) {
             SimpleStepContext simpleStepCtx = (SimpleStepContext) stepCtx;
             IOutputDescriptor outputFromCommand = DescriptorsUtils.getOutputFromCommand(simpleStepCtx.getCommandDescriptor(), outputName);
-            return outputFromCommand.getValue();
+            return new AbstractMap.SimpleEntry<>(outputFromCommand.getType(), outputFromCommand.getValue());
         }
-        else
-            return getOutputValueFromPipeline(outputName, pipeline, stepCtx);
+        else {
+            IOutputDescriptor outputFromPipeline = getOutputValueFromPipeline(outputName, pipeline, stepCtx);
+            return new AbstractMap.SimpleEntry<>(outputFromPipeline.getType(), outputFromPipeline.getValue());
+        }
     }
 
-    private static String getOutputValueFromPipeline(String outputName, PipelineContext pipeline,
+    private static IOutputDescriptor getOutputValueFromPipeline(String outputName, PipelineContext pipeline,
                                                      StepContext stepCtx) throws EngineException {
         PipelineContext currPipeline = createSubPipeline(stepCtx.getId(), pipeline);
 
@@ -423,13 +416,14 @@ public class ContextFactory {
 
                 if(insideStepCtx instanceof SimpleStepContext) {
                     SimpleStepContext simpleStepCtx = (SimpleStepContext) stepCtx;
-                    return DescriptorsUtils.getOutputFromCommand(simpleStepCtx.getCommandDescriptor(), outputName).toString();
+                    return DescriptorsUtils.getOutputFromCommand(simpleStepCtx.getCommandDescriptor(), outputName);
                 } else {
                     PipelineContext nextPipeline = createSubPipeline(insideStepCtx.getId(), pipeline);
                     return getOutputValueFromPipeline(outputName, nextPipeline, insideStepCtx);
                 }
             }
         }
-        return "";
+
+        throw new EngineException("Not output " + outputName + " found for step " + stepCtx.getId() + ".");
     }
 }

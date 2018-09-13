@@ -27,14 +27,14 @@ public class DockerCommandBuilder extends CommandBuilder {
         Environment environment = stepCtx.getEnvironment();
         IExecutionContextDescriptor execContext = stepCtx.getExecutionContextDescriptor();
         String dockerImage = getDockerImageName(execContext, stepId);
-        String executionCommand = buildCommand(pipelineContext, stepId, this::getDockerFileValue);
+        String executionCommand = buildCommand(pipelineContext, stepId, this::getDockerInputValue);
         String command = String.format(DOCKER_CMD, environment.getOutputsDirectory(),
                                         pipelineContext.getPipelineEnvironment().getWorkDirectory(),
                                         dockerImage, executionCommand);
         return command;
     }
 
-    private Object getDockerFileValue(SimpleStepContext stepCtx, Object value) throws CommandBuilderException {
+    private Object getDockerInputValue(SimpleStepContext stepCtx, Object value) throws CommandBuilderException {
         String valStr = value.toString();
         String separator = File.separatorChar + "";
         String currStep = stepCtx.getEnvironment().getWorkDirectory() + separator;

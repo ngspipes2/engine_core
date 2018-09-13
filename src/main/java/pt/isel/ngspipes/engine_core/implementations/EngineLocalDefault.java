@@ -5,10 +5,7 @@ import pt.isel.ngspipes.engine_core.entities.Environment;
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_core.entities.ExecutionState;
 import pt.isel.ngspipes.engine_core.entities.StateEnum;
-import pt.isel.ngspipes.engine_core.entities.contexts.ComposeStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.SimpleStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
@@ -27,7 +24,10 @@ import pt.isel.ngspipes.tool_descriptor.interfaces.IOutputDescriptor;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.*;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
 
 public class EngineLocalDefault extends Engine {
 
@@ -37,7 +37,7 @@ public class EngineLocalDefault extends Engine {
     private static final String TAG = "LocalEngine";
 
 
-    private final Map<String, Collection<BasicTask<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
+    private final Map<String, Map<StepContext, BasicTask<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
     private final ConsoleReporter reporter = new ConsoleReporter();
 
 
@@ -49,28 +49,19 @@ public class EngineLocalDefault extends Engine {
 
     @Override
     protected void stage(PipelineContext pipeline) throws EngineException {
-            copyPipelineInputs(pipeline);
-            schedulePipeline(pipeline);
-            pipeline.getState().setState(StateEnum.SCHEDULE);
+        copyPipelineInputs(pipeline);
+        schedulePipeline(pipeline);
+        pipeline.getState().setState(StateEnum.SCHEDULE);
     }
 
-
-
-    private void schedulePipeline(PipelineContext pipeline) {
-        logger.trace(TAG + ":: Scheduling pipeline " + pipeline.getExecutionId() + " " + pipeline.getPipelineName());
-        String executionId = pipeline.getExecutionId();
-        TASKS_BY_EXEC_ID.put(executionId, new LinkedList<>());
-        Collection<ExecutionNode> executionGraph = pipeline.getPipelineGraph();
-        run(pipeline, executionId, executionGraph);
-    }
 
     @Override
     public boolean stop(String executionId) {
         boolean stopped = true;
-        for (BasicTask<Void> task : TASKS_BY_EXEC_ID.get(executionId)){
-            task.cancel();
+        for (Map.Entry<StepContext, BasicTask<Void>> step : TASKS_BY_EXEC_ID.get(executionId).entrySet()){
+            step.getValue().cancel();
             try {
-                stopped = stopped && task.cancelledEvent.await(200);
+                stopped = stopped && step.getValue().cancelledEvent.await(200);
             } catch (InterruptedException e) {
                 ExecutionState state = new ExecutionState();
                 state.setState(StateEnum.STOPPED);
@@ -82,14 +73,23 @@ public class EngineLocalDefault extends Engine {
 
 
 
+    private void schedulePipeline(PipelineContext pipeline) {
+        logger.trace(TAG + ":: Scheduling pipeline " + pipeline.getExecutionId() + " " + pipeline.getPipelineName());
+        String executionId = pipeline.getExecutionId();
+        TASKS_BY_EXEC_ID.put(executionId, new HashMap<>());
+        Collection<ExecutionNode> executionGraph = pipeline.getPipelineGraph();
+        run(pipeline, executionId, executionGraph);
+    }
+
     private void updatePipelineState(String executionId, ExecutionState state) {
         pipelines.get(executionId).setState(state);
     }
 
     private void run(PipelineContext pipeline, String executionId, Collection<ExecutionNode> executionGraph) {
         Map<StepContext, BasicTask<Void>> taskMap = getTasks(executionGraph, pipeline, new HashMap<>());
+        TASKS_BY_EXEC_ID.put(executionId, taskMap);
         scheduleChildTasks(taskMap);
-        scheduleParentsTasks(executionGraph, executionId, taskMap);
+        scheduleParentsTasks(executionGraph, executionId);
     }
 
     private void copyPipelineInputs(PipelineContext pipeline) throws EngineException {
@@ -114,23 +114,23 @@ public class EngineLocalDefault extends Engine {
         }
     }
 
-    private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId,
-                                      Map<StepContext, BasicTask<Void>> taskMap) {
+    private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId) {
         try {
-            executeParents(executionGraph, taskMap);
+            executeParents(executionGraph, executionId);
         } catch (EngineException e) {
             ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
             updatePipelineState(executionId, state);
         }
     }
 
-    private void executeParents(Collection<ExecutionNode> executionGraph, Map<StepContext, BasicTask<Void>> taskMap)
+    private void executeParents(Collection<ExecutionNode> executionGraph, String executionId)
                                 throws EngineException {
         for (ExecutionNode parentNode : executionGraph) {
             StepContext stepContext = parentNode.getStepContext();
             try {
                 logger.trace(TAG + ":: Executing step " + stepContext.getId());
-                taskMap.get(stepContext).run();
+                BasicTask<Void> voidBasicTask = TASKS_BY_EXEC_ID.get(executionId).get(stepContext);
+                voidBasicTask.run();
             } catch (Exception e) {
                 logger.error(TAG + ":: Executing step " + stepContext.getId(), e);
                 throw new EngineException("Error executing step: " + stepContext.getId(), e);
@@ -162,10 +162,8 @@ public class EngineLocalDefault extends Engine {
         return parentsTasks;
     }
 
-    private Map<StepContext, BasicTask<Void>> getTasks(Collection<ExecutionNode> executionGraph, PipelineContext pipeline,
+    private Map<StepContext, BasicTask<Void>> getTasks( Collection<ExecutionNode> executionGraph, PipelineContext pipeline,
                                                         Map<StepContext, BasicTask<Void>> taskMap) {
-
-        String executionId = pipeline.getExecutionId();
 
         for (ExecutionNode node : executionGraph) {
             StepContext stepContext = node.getStepContext();
@@ -177,7 +175,6 @@ public class EngineLocalDefault extends Engine {
                 }
             });
             taskMap.put(stepContext, task);
-            TASKS_BY_EXEC_ID.get(executionId).add(task);
             getTasks(node.getChilds(), pipeline, taskMap);
         }
 
@@ -354,12 +351,14 @@ public class EngineLocalDefault extends Engine {
     }
 
     private void setOutputs(SimpleStepContext stepContext, PipelineContext pipeline) throws EngineException {
-        Map<String, Object> outputs = new HashMap<>();
+        Map<String, InOutContext> outputs = new HashMap<>();
 
         for (IOutputDescriptor output : stepContext.getCommandDescriptor().getOutputs()) {
             String value = output.getValue();
-            if(value.contains("$") && ValidateUtils.isOutputDependentInputSpecified(value, stepContext.getStep().getInputs()))
-                outputs.put(output.getName(), ContextFactory.getOutputValue(output, stepContext, pipeline));
+            if(value.contains("$") && ValidateUtils.isOutputDependentInputSpecified(value, stepContext.getStep().getInputs())) {
+                InOutContext outputValue = ContextFactory.getOutputValue(output, stepContext, pipeline);
+                outputs.put(output.getName(), outputValue);
+            }
         }
         stepContext.setOutputs(outputs);
     }

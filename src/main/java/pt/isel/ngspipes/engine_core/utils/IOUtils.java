@@ -1,7 +1,5 @@
 package pt.isel.ngspipes.engine_core.utils;
 
-import pt.isel.ngspipes.engine_core.exception.EngineException;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;

@@ -15,7 +15,8 @@ public abstract class StepContext {
     private final IStepDescriptor step;
     private final ExecutionState state;
     private final Collection<StepContext> parents;
-    private Map<String, Object> outputs;
+    private Map<String, InOutContext> outputs;
+    private Map<String, InOutContext> inputs;
 
     public StepContext(String id, Environment environment, IStepDescriptor step) {
         this.id = id;
@@ -31,8 +32,8 @@ public abstract class StepContext {
     public ExecutionState getState() { return state; }
     public Collection<StepContext> getParents() { return parents;}
 
-    public void setOutputs(Map<String, Object> outputs) { this.outputs = outputs; }
-    public Map<String, Object> getOutputs() { return outputs; }
+    public void setOutputs(Map<String, InOutContext> outputs) { this.outputs = outputs; }
+    public Map<String, InOutContext> getOutputs() { return outputs; }
 
 
     @Override

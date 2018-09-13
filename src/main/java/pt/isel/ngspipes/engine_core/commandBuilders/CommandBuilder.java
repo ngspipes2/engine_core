@@ -7,6 +7,7 @@ import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.utils.DescriptorsUtils;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.ChainInputDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.SimpleInputDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
@@ -32,11 +33,10 @@ abstract class CommandBuilder implements ICommandBuilder {
         SimpleStepContext stepCtx = (SimpleStepContext) pipelineContext.getStepsContexts().get(stepId);
         ICommandDescriptor cmdDescriptor = stepCtx.getCommandDescriptor();
         StringBuilder sb = new StringBuilder(cmdDescriptor.getCommand());
-        Collection<IInputDescriptor> inputs = new LinkedList<>(stepCtx.getStep().getInputs());
 
         visitedInputs = new LinkedList<>();
         buildInputs = new LinkedList<>();
-        for (IInputDescriptor input : inputs) {
+        for (IInputDescriptor input : stepCtx.getStep().getInputs()) {
             if (visitedInputs.contains(input.getInputName()))
                 continue;
             sb.append(" ");
@@ -90,13 +90,18 @@ abstract class CommandBuilder implements ICommandBuilder {
                                StringBuilder sb, IInputDescriptor input, IParameterDescriptor paramDesc,
                                TriFunction<SimpleStepContext, Object, Object> func) throws CommandBuilderException {
         Object value = getValue(pipelineContext, stepId, input);
-        if (paramDesc.getType().equalsIgnoreCase("file") ) {
+        String type = paramDesc.getType();
+        if (type.equalsIgnoreCase("file") || (type.equalsIgnoreCase("directory") && input instanceof IChainInputDescriptor)) {
             value = getChainFileValue(pipelineContext, input, value);
+            updateInput(input, value);
             value = getFileInputValue(stepCtx, func, value);
-        } else if (paramDesc.getType().equalsIgnoreCase("flag")) {
+        } else if (type.equalsIgnoreCase("flag")) {
             value = "";
+            updateInput(input, value);
+        } else {
+            updateInput(input, value);
         }
-        updateInput(input, value);
+
         buildInput(sb, paramDesc, value);
     }
 
