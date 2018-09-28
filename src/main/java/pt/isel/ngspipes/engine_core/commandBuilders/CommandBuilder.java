@@ -1,5 +1,6 @@
 package pt.isel.ngspipes.engine_core.commandBuilders;
 
+import pt.isel.ngspipes.engine_core.entities.contexts.InOutContext;
 import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
 import pt.isel.ngspipes.engine_core.entities.contexts.SimpleStepContext;
 import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
@@ -92,7 +93,6 @@ abstract class CommandBuilder implements ICommandBuilder {
         Object value = getValue(pipelineContext, stepId, input);
         String type = paramDesc.getType();
         if (type.equalsIgnoreCase("file") || (type.equalsIgnoreCase("directory") && input instanceof IChainInputDescriptor)) {
-            value = getChainFileValue(pipelineContext, input, value);
             updateInput(input, value);
             value = getFileInputValue(stepCtx, func, value);
         } else if (type.equalsIgnoreCase("flag")) {
@@ -111,15 +111,6 @@ abstract class CommandBuilder implements ICommandBuilder {
         input1.setInputName(inputName);
         input1.setValue(value);
         buildInputs.add(input1);
-    }
-
-    private Object getChainFileValue(PipelineContext pipelineContext, IInputDescriptor input, Object value) {
-        if (input instanceof ChainInputDescriptor) {
-            ChainInputDescriptor input1 = (ChainInputDescriptor) input;
-            StepContext chainStepCtx = pipelineContext.getStepsContexts().get(input1.getStepId());
-            value = chainStepCtx.getOutputs().get(input1.getOutputName());
-        }
-        return value;
     }
 
     private Object getFileInputValue(SimpleStepContext stepCtx, TriFunction<SimpleStepContext, Object, Object> func,
@@ -167,6 +158,8 @@ abstract class CommandBuilder implements ICommandBuilder {
         Object inputValue;
         try {
             inputValue = DescriptorsUtils.getInputValue(subIn, pipelineCtx);
+            if (inputValue instanceof InOutContext)
+                inputValue = ((InOutContext) inputValue).getValue();
         } catch (EngineException e) {
             throw new CommandBuilderException("Error building command for step " + stepId + ". ", e);
         }

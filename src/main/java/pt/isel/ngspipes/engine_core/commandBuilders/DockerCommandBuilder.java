@@ -19,7 +19,6 @@ public class DockerCommandBuilder extends CommandBuilder {
                                              "%2$s:/sharedInputs/:rw %3$s %4$s";
     private static final String DOCKER_IMG_NAME_KEY = "uri";
     private static final String DOCKER_IMG_TAG_KEY = "tag";
-    private static final Map<String, String> volumes = new HashMap<>();
 
     @Override
     public String build(PipelineContext pipelineContext, String stepId) throws CommandBuilderException {
@@ -34,24 +33,12 @@ public class DockerCommandBuilder extends CommandBuilder {
         return command;
     }
 
-    private Object getDockerInputValue(SimpleStepContext stepCtx, Object value) throws CommandBuilderException {
+    private Object getDockerInputValue(SimpleStepContext stepCtx, Object value) {
         String valStr = value.toString();
         String separator = File.separatorChar + "";
-        String currStep = stepCtx.getEnvironment().getWorkDirectory() + separator;
         int begin = valStr.lastIndexOf(separator);
         String inputName = valStr.substring(begin + 1);
-        copyChainInput(stepCtx, valStr, currStep, inputName);
         return separator + "sharedInputs" + separator + stepCtx.getId() + separator + inputName;
-    }
-
-    private void copyChainInput(SimpleStepContext stepCtx, String valStr, String currStep, String inputName) throws CommandBuilderException {
-        if (!valStr.contains(stepCtx.getId())) {
-            try {
-                IOUtils.copyFile(valStr, currStep + inputName);
-            } catch (IOException e) {
-                throw new CommandBuilderException("Error copying chain input " + inputName, e);
-            }
-        }
     }
 
     private String getDockerImageName(IExecutionContextDescriptor execContext, String stepId) throws CommandBuilderException {

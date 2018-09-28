@@ -9,12 +9,10 @@ import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
-import pt.isel.ngspipes.engine_core.tasks.BasicTask;
-import pt.isel.ngspipes.engine_core.tasks.Task;
-import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.*;
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.StepDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.input.ChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.SimpleInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.ISpreadDescriptor;
@@ -37,7 +35,6 @@ public class EngineLocalDefault extends Engine {
     private static final String TAG = "LocalEngine";
 
 
-    private final Map<String, Map<StepContext, BasicTask<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
     private final ConsoleReporter reporter = new ConsoleReporter();
 
 
@@ -57,18 +54,7 @@ public class EngineLocalDefault extends Engine {
 
     @Override
     public boolean stop(String executionId) {
-        boolean stopped = true;
-        for (Map.Entry<StepContext, BasicTask<Void>> step : TASKS_BY_EXEC_ID.get(executionId).entrySet()){
-            step.getValue().cancel();
-            try {
-                stopped = stopped && step.getValue().cancelledEvent.await(200);
-            } catch (InterruptedException e) {
-                ExecutionState state = new ExecutionState();
-                state.setState(StateEnum.STOPPED);
-                updatePipelineState(executionId, state);
-            }
-        }
-        return stopped;
+        return true;
     }
 
 
@@ -76,19 +62,15 @@ public class EngineLocalDefault extends Engine {
     private void schedulePipeline(PipelineContext pipeline) {
         logger.trace(TAG + ":: Scheduling pipeline " + pipeline.getExecutionId() + " " + pipeline.getPipelineName());
         String executionId = pipeline.getExecutionId();
-        TASKS_BY_EXEC_ID.put(executionId, new HashMap<>());
         Collection<ExecutionNode> executionGraph = pipeline.getPipelineGraph();
-        run(pipeline, executionId, executionGraph);
+        run(executionId, executionGraph);
     }
 
     private void updatePipelineState(String executionId, ExecutionState state) {
         pipelines.get(executionId).setState(state);
     }
 
-    private void run(PipelineContext pipeline, String executionId, Collection<ExecutionNode> executionGraph) {
-        Map<StepContext, BasicTask<Void>> taskMap = getTasks(executionGraph, pipeline, new HashMap<>());
-        TASKS_BY_EXEC_ID.put(executionId, taskMap);
-        scheduleChildTasks(taskMap);
+    private void run(String executionId, Collection<ExecutionNode> executionGraph) {
         scheduleParentsTasks(executionGraph, executionId);
     }
 
@@ -129,56 +111,12 @@ public class EngineLocalDefault extends Engine {
             StepContext stepContext = parentNode.getStepContext();
             try {
                 logger.trace(TAG + ":: Executing step " + stepContext.getId());
-                BasicTask<Void> voidBasicTask = TASKS_BY_EXEC_ID.get(executionId).get(stepContext);
-                voidBasicTask.run();
+                runTask(stepContext, pipelines.get(executionId));
             } catch (Exception e) {
                 logger.error(TAG + ":: Executing step " + stepContext.getId(), e);
                 throw new EngineException("Error executing step: " + stepContext.getId(), e);
             }
         }
-    }
-
-    private void scheduleChildTasks(Map<StepContext, BasicTask<Void>> taskMap) {
-        for (Map.Entry<StepContext, BasicTask<Void>> entry : taskMap.entrySet()) {
-            if (!entry.getKey().getParents().isEmpty()) {
-                runWhenAll(entry.getKey(), taskMap);
-            }
-        }
-    }
-
-    private void runWhenAll(StepContext stepContext, Map<StepContext, BasicTask<Void>> taskMap) {
-        Collection<Task<Void>> parentsTasks = getParentsTasks(stepContext.getParents(), taskMap);
-        Task<Collection<Void>> tasks = TaskFactory.whenAllTasks(parentsTasks);
-        tasks.then(taskMap.get(stepContext));
-
-    }
-
-    private Collection<Task<Void>> getParentsTasks(Collection<StepContext> parents, Map<StepContext, BasicTask<Void>> taskMap) {
-        Collection<Task<Void>> parentsTasks = new LinkedList<>();
-
-        for (StepContext parent : parents)
-            parentsTasks.add(taskMap.get(parent));
-
-        return parentsTasks;
-    }
-
-    private Map<StepContext, BasicTask<Void>> getTasks( Collection<ExecutionNode> executionGraph, PipelineContext pipeline,
-                                                        Map<StepContext, BasicTask<Void>> taskMap) {
-
-        for (ExecutionNode node : executionGraph) {
-            StepContext stepContext = node.getStepContext();
-            BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
-                try {
-                    runTask(stepContext, pipeline);
-                } catch (EngineException e) {
-                    updateState(pipeline, stepContext, e);
-                }
-            });
-            taskMap.put(stepContext, task);
-            getTasks(node.getChilds(), pipeline, taskMap);
-        }
-
-        return taskMap;
     }
 
     private void updateState(PipelineContext pipeline, StepContext stepContext, EngineException e) {
@@ -200,8 +138,13 @@ public class EngineLocalDefault extends Engine {
         if (stepContext.getStep().getSpread() != null) {
             runSpreadStep(pipeline, stepCtx);
         } else {
-            run(stepCtx, pipeline);
+            execute(pipeline, stepCtx);
         }
+    }
+
+    private void execute(PipelineContext pipeline, SimpleStepContext stepCtx) throws EngineException {
+        copyChainInputs(stepCtx, pipeline);
+        run(stepCtx, pipeline);
     }
 
     private void runSpreadStep(PipelineContext pipeline, SimpleStepContext stepCtx) throws EngineException {
@@ -214,7 +157,11 @@ public class EngineLocalDefault extends Engine {
 
         while (idx < len) {
             SimpleStepContext stepContext = getSpreadStepContext(stepCtx, valuesOfInputsToSpread, idx);
-            createAndExecuteTask(pipeline, stepContext);
+            try {
+                execute(pipeline, stepContext);
+            } catch (EngineException e) {
+                updateState(pipeline, stepContext, e);
+            }
             idx++;
         }
     }
@@ -223,16 +170,6 @@ public class EngineLocalDefault extends Engine {
         if (valuesOfInputsToSpread.values().iterator().hasNext())
             return valuesOfInputsToSpread.values().iterator().next().size();
         return 0;
-    }
-
-    private void createAndExecuteTask(PipelineContext pipeline, SimpleStepContext stepContext) {
-        TaskFactory.createAndExecuteTask(() -> {
-            try {
-                run(stepContext, pipeline);
-            } catch (EngineException e) {
-                updateState(pipeline, stepContext, e);
-            }
-        });
     }
 
     private SimpleStepContext getSpreadStepContext(SimpleStepContext stepCtx, Map<String, Collection<String>> inputs, int idx) {
@@ -340,7 +277,7 @@ public class EngineLocalDefault extends Engine {
         }
     }
 
-    private String getExecutionCommand(SimpleStepContext stepCtx, PipelineContext pipeline) throws EngineException {
+    private String  getExecutionCommand(SimpleStepContext stepCtx, PipelineContext pipeline) throws EngineException {
         try {
             String command = stepCtx.getCommandBuilder().build(pipeline, stepCtx.getId());
             return String.format(RUN_CMD, command);
@@ -356,11 +293,91 @@ public class EngineLocalDefault extends Engine {
         for (IOutputDescriptor output : stepContext.getCommandDescriptor().getOutputs()) {
             String value = output.getValue();
             if(value.contains("$") && ValidateUtils.isOutputDependentInputSpecified(value, stepContext.getStep().getInputs())) {
-                InOutContext outputValue = ContextFactory.getOutputValue(output, stepContext, pipeline);
-                outputs.put(output.getName(), outputValue);
+                InOutContext outputContext = ContextFactory.getOutputValue(output, stepContext, pipeline);
+                outputs.put(output.getName(), outputContext);
+
+                if (!output.getType().equalsIgnoreCase("file") && !output.getType().equalsIgnoreCase("directory")) {
+                    String used = findDependentOutput(output.getName(), stepContext.getCommandDescriptor().getOutputs()).getName();
+                    outputContext.setUsedBy(used);
+                }
+
+
+                // case command write in the same input file or directory
+                if (ValidateUtils.isOutputDependentInputTypeNoPrimitive(value, stepContext)) {
+                    String outValue = File.separatorChar + outputContext.getValue().toString();
+                    String source = stepContext.getEnvironment().getWorkDirectory() + outValue;
+                    String dest = stepContext.getEnvironment().getOutputsDirectory() + outValue;
+                    if (output.getType().equalsIgnoreCase("directory")) {
+                        copyDirectory(source, dest);
+                    } else {
+                        copyFiles(source, dest);
+                    }
+                }
             }
         }
         stepContext.setOutputs(outputs);
+    }
+
+    private IOutputDescriptor findDependentOutput(String name, Collection<IOutputDescriptor> outputs) {
+        for (IOutputDescriptor output : outputs)
+            if (output.getName().equals(name))
+                return output;
+        return null;
+    }
+
+    private void copyChainInputs(SimpleStepContext stepCtx, PipelineContext pipeline) throws EngineException {
+
+        String outputDirectory = stepCtx.getEnvironment().getWorkDirectory() + File.separatorChar;
+        for (IInputDescriptor input : stepCtx.getStep().getInputs()) {
+            if (input instanceof ChainInputDescriptor) {
+                InOutContext value = getChainValue(pipeline, (ChainInputDescriptor) input);
+                String origStepWorkingDir = pipeline.getStepsContexts()
+                                                    .get(value.getOriginStep())
+                                                    .getEnvironment()
+                                                    .getOutputsDirectory();
+                String usedBy = value.getUsedBy();
+                String outValue = value.getValue().toString();
+
+                if (usedBy != null && !usedBy.isEmpty()) {
+                    String usedByValue = stepCtx.getOutputs().get(usedBy).getValue().toString();
+                    outValue = usedBy.isEmpty() ? outValue : usedByValue;
+                }
+
+                String valStr = origStepWorkingDir + File.separatorChar + outValue;
+                int begin = valStr.lastIndexOf(File.separatorChar);
+                String inputName = valStr.substring(begin + 1);
+                if (value.getType().equalsIgnoreCase("directory")) {
+                    copyDirectory(valStr, outputDirectory + inputName);
+                } else {
+                    copyFiles(valStr, outputDirectory + inputName);
+                }
+            }
+        }
+    }
+
+    private InOutContext getChainValue(PipelineContext pipelineContext, ChainInputDescriptor input) {
+        StepContext chainStepCtx = pipelineContext.getStepsContexts().get(input.getStepId());
+        return chainStepCtx.getOutputs().get(input.getOutputName());
+    }
+
+    private void copyDirectory(String source, String dest) throws EngineException {
+        int begin = source.lastIndexOf(File.separatorChar);
+        String inputName = source.substring(begin + 1);
+        try {
+            IOUtils.copyDirectory(source, dest);
+        } catch (IOException e) {
+            throw new EngineException("Error copying chain input " + inputName, e);
+        }
+    }
+
+    private void copyFiles(String source, String dest) throws EngineException {
+        int begin = source.lastIndexOf(File.separatorChar);
+        String inputName = source.substring(begin + 1);
+        try {
+            IOUtils.copyFile(source, dest);
+        } catch (IOException e) {
+            throw new EngineException("Error copying chain input " + inputName, e);
+        }
     }
 
 }

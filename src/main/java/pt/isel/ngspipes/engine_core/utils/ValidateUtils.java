@@ -416,4 +416,14 @@ public class ValidateUtils {
         return contains;
     }
 
+    public static boolean isOutputDependentInputTypeNoPrimitive(String value, SimpleStepContext step) {
+        boolean nonPrimitive = false;
+        for (IInputDescriptor input : step.getStep().getInputs()) {
+            IParameterDescriptor param = DescriptorsUtils.getParameterById(step.getCommandDescriptor().getParameters(), input.getInputName());
+            if (value.contains(input.getInputName()) && (param.getType().equalsIgnoreCase("file") || param.getType().equalsIgnoreCase("directory"))) {
+                nonPrimitive = true;
+            }
+        }
+        return nonPrimitive;
+    }
 }

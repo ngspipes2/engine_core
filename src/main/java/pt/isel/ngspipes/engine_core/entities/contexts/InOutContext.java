@@ -6,6 +6,7 @@ public class InOutContext {
     private final String originStep;
     private final String type;
     private final Object value;
+    private String usedBy;
 
     public InOutContext(String name, String originStep, String type, Object value) {
         this.name = name;
@@ -18,4 +19,7 @@ public class InOutContext {
     public String getName() { return name; }
     public String getType() { return type; }
     public Object getValue() { return value; }
+
+    public String getUsedBy() { return usedBy; }
+    public void setUsedBy(String usedBy) { this.usedBy = usedBy; }
 }
