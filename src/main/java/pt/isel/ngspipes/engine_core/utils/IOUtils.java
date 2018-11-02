@@ -60,4 +60,11 @@ public class IOUtils {
                 }
             }
     }
+
+    public static void verifyFile(String path) throws IOException {
+        File file = new File(path);
+
+        if (!file.exists())
+            throw new IOException("File " + path + " not found");
+    }
 }

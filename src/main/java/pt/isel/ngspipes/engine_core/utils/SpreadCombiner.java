@@ -1,7 +1,12 @@
 package pt.isel.ngspipes.engine_core.utils;
 
+import pt.isel.ngspipes.engine_core.entities.contexts.strategy.ICombineStrategy;
+import pt.isel.ngspipes.engine_core.entities.contexts.strategy.IStrategy;
+import pt.isel.ngspipes.engine_core.entities.contexts.strategy.InputStrategy;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
-import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.*;
+import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IInputStrategyDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IOneToManyStrategyDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IOneToOneStrategyDescriptor;
 
 import java.util.Collection;
 import java.util.LinkedList;
@@ -10,27 +15,27 @@ import java.util.Map;
 public class SpreadCombiner {
 
 
-    public static void getInputsCombination(ICombineStrategyDescriptor strategy, Map<String, Collection<String>> inputsToSpread) throws EngineException {
+    public static void getInputsCombination(ICombineStrategy strategy, Map<String, Collection<String>> inputsToSpread) throws EngineException {
 
-        IStrategyDescriptor first = strategy.getFirstStrategy();
-        IStrategyDescriptor second = strategy.getSecondStrategy();
+        IStrategy first = strategy.getFirstStrategy();
+        IStrategy second = strategy.getSecondStrategy();
 
         if (first instanceof IInputStrategyDescriptor) {
             if (second instanceof IInputStrategyDescriptor) {
                 combineInputs(inputsToSpread, strategy);
             } else {
-                getInputsCombination((ICombineStrategyDescriptor) second, inputsToSpread);
+                getInputsCombination((ICombineStrategy) second, inputsToSpread);
             }
-        } else if (second instanceof IInputStrategyDescriptor) {
-            getInputsCombination((ICombineStrategyDescriptor) first, inputsToSpread);
+        } else if (second instanceof InputStrategy) {
+            getInputsCombination((ICombineStrategy) first, inputsToSpread);
         } else {
-            getInputsCombination((ICombineStrategyDescriptor) first, inputsToSpread);
-            getInputsCombination((ICombineStrategyDescriptor) second, inputsToSpread);
+            getInputsCombination((ICombineStrategy) first, inputsToSpread);
+            getInputsCombination((ICombineStrategy) second, inputsToSpread);
         }
     }
 
     private static void combineInputs(Map<String, Collection<String>> inputsToSpread,
-                               ICombineStrategyDescriptor strategy) throws EngineException {
+                                      ICombineStrategy strategy) throws EngineException {
         IInputStrategyDescriptor firstStrategy = (IInputStrategyDescriptor) strategy.getFirstStrategy();
         IInputStrategyDescriptor secondStrategy = (IInputStrategyDescriptor) strategy.getSecondStrategy();
         if (strategy instanceof IOneToOneStrategyDescriptor) {
@@ -59,5 +64,4 @@ public class SpreadCombiner {
         inputsToSpread.put(one, oneCombinedValues);
         inputsToSpread.put(many, manyCombinedValues);
     }
-
 }

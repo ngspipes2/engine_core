@@ -1,131 +1,124 @@
 package pt.isel.ngspipes.engine_core.utils;
 
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
-import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
-import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
-import pt.isel.ngspipes.pipeline_descriptor.step.input.ChainInputDescriptor;
-import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
+import pt.isel.ngspipes.engine_core.entities.contexts.Input;
+import pt.isel.ngspipes.engine_core.entities.contexts.Job;
+import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class TopologicSorter {
 
-    public static Collection<ExecutionNode> parallelSort(PipelineContext pipeline) {
-        Collection<IStepDescriptor> steps = getSteps(pipeline.getStepsContexts());
-        Map<String, Collection<IStepDescriptor>> chainsFrom = getChainFrom(steps);
-        Map<String, Collection<IStepDescriptor>> chainsTo = getChainTo(steps);
-        Map<String, Collection<IStepDescriptor>> chainsToCpy = getChainTo(steps);
-        List<IStepDescriptor> roots = getRoots(steps);
-        Collection<ExecutionNode> graph = getRootJobs(pipeline, roots);
+    public static Collection<ExecutionNode> parallelSort(Pipeline pipeline) {
+        Collection<Job> jobs = pipeline.getJobs();
+        Map<String, Collection<Job>> chainsFrom = getChainFrom(jobs);
+        Map<String, Collection<Job>> chainsTo = getChainTo(jobs);
+        Map<String, Collection<Job>> chainsToCpy = getChainTo(jobs);
+        List<Job> roots = getRoots(jobs);
+        Collection<ExecutionNode> graph = getRootJobs(roots);
 
         while(!roots.isEmpty()) {
-            IStepDescriptor root = roots.remove(0);
+            Job root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
                 addStepParents(graph, chainsToCpy, pipeline);
                 return graph;
             }
 
-            for(IStepDescriptor step : chainsFrom.get(root.getId())){
-                if(chainsTo.containsKey(step.getId()))
-                    chainsTo.get(step.getId()).remove(root);
+            for(Job job : chainsFrom.get(root.getId())){
+                if(chainsTo.containsKey(job.getId()))
+                    chainsTo.get(job.getId()).remove(root);
 
-                if(chainsTo.get(step.getId()).isEmpty()) {
-                    roots.add(0, step);
+                if(chainsTo.get(job.getId()).isEmpty()) {
+                    roots.add(0, job);
                 }
-                addToGraphIfAbsent(graph, pipeline.getStepsContexts().get(root.getId()),
-                                    pipeline.getStepsContexts().get(step.getId()));
+                addToGraphIfAbsent(graph, root, job);
             }
         }
         addStepParents(graph, chainsTo, pipeline);
         return graph;
     }
 
-    public static Collection<ExecutionNode> sequentialSort(PipelineContext pipeline) {
-        Collection<IStepDescriptor> steps = getSteps(pipeline.getStepsContexts());
-        Map<String, Collection<IStepDescriptor>> chainsFrom = getChainFrom(steps);
-        Map<String, Collection<IStepDescriptor>> chainsTo = getChainTo(steps);
-        List<IStepDescriptor> roots = getRoots(steps);
-        List<ExecutionNode> orderedSteps = new LinkedList<>(getRootJobs(pipeline, roots));
+    public static Collection<ExecutionNode> sequentialSort(Pipeline pipeline) {
+        Collection<Job> jobs = pipeline.getJobs();
+        Map<String, Collection<Job>> chainsFrom = getChainFrom(jobs);
+        Map<String, Collection<Job>> chainsTo = getChainTo(jobs);
+        List<Job> roots = getRoots(jobs);
+        List<ExecutionNode> orderedSteps = addSequentialRoots(getRootJobs(roots));
 
         while(!roots.isEmpty()) {
-            IStepDescriptor root = roots.remove(0);
+            Job root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
-                addStepParents(orderedSteps);
                 return orderedSteps;
             }
 
-            for(IStepDescriptor step : chainsFrom.get(root.getId())){
-                String id = step.getId();
+            for(Job job : chainsFrom.get(root.getId())){
+                String id = job.getId();
                 if(chainsTo.containsKey(id))
                     chainsTo.get(id).remove(root);
 
                 if(chainsTo.get(id).isEmpty()) {
-                    roots.add(0, step);
-                    StepContext stepContext = pipeline.getStepsContexts().get(id);
-                    if(notContainsNode(stepContext, orderedSteps)) {
-                        orderedSteps.add(new ExecutionNode(stepContext));
-                    }
+                    roots.add(0, job);
+                    addSequentialChild(orderedSteps, job);
                 }
             }
         }
 
-        addStepParents(orderedSteps);
         return orderedSteps;
     }
 
+    private static List<ExecutionNode> addSequentialRoots(List<ExecutionNode> rootJobs) {
+        List<ExecutionNode> nodes = new LinkedList<>();
+        nodes.add(rootJobs.get(0));
 
+        for (int idx = 1; idx < rootJobs.size(); idx++)
+            addSequentialChild(nodes, rootJobs.get(idx).getJob());
 
-    private static Collection<IStepDescriptor> getSteps(Map<String, StepContext> stepsContexts) {
-        Collection<IStepDescriptor> steps = new LinkedList<>();
-
-        for (Map.Entry<String, StepContext> stepCtx : stepsContexts.entrySet())
-            steps.add(stepCtx.getValue().getStep());
-
-        return steps;
+        return nodes;
     }
 
-    private static void addStepParents(List<ExecutionNode> orderedSteps) {
-
-        for (int idx = orderedSteps.size() - 1; idx > 0; idx--) {
-            LinkedList<StepContext> parents = new LinkedList<>();
-            parents.add(orderedSteps.get(idx-1).getStepContext());
-            orderedSteps.get(idx).getStepContext().getParents().addAll(parents);
+    private static void addSequentialChild(List<ExecutionNode> orderedSteps, Job job) {
+        ExecutionNode node = orderedSteps.get(0);
+        if (!node.getJob().getId().equals(job.getId())) {
+            if (node.getChilds().isEmpty()) {
+                node.getChilds().add(new ExecutionNode(job));
+                job.addParent(node.getJob());
+            } else
+                addSequentialChild(node.getChilds(), job);
         }
     }
 
-    private static void addStepParents(Collection<ExecutionNode> graph, Map<String, Collection<IStepDescriptor>> chainsTo, PipelineContext pipeline) {
+    private static void addStepParents(Collection<ExecutionNode> graph, Map<String, Collection<Job>> chainsTo, Pipeline pipeline) {
         for (ExecutionNode node : graph) {
             getParents(chainsTo, node, pipeline);
         }
     }
 
-    private static void getParents(Map<String, Collection<IStepDescriptor>> chainsTo, ExecutionNode node, PipelineContext pipeline) {
+    private static void getParents(Map<String, Collection<Job>> chainsTo, ExecutionNode node, Pipeline pipeline) {
         for (ExecutionNode child : node.getChilds()) {
-            String stepId = child.getStepContext().getId();
-            if (chainsTo.containsKey(stepId)) {
-                Collection<StepContext> parents = new LinkedList<>();
-                parents.addAll(getParents(chainsTo.get(stepId), pipeline));
-                child.getStepContext().getParents().addAll(parents);
-                chainsTo.remove(stepId);
+            String jobId = child.getJob().getId();
+            if (chainsTo.containsKey(jobId)) {
+                Collection<String> parents = new LinkedList<>();
+                parents.addAll(getParents(chainsTo.get(jobId), pipeline));
+                child.getJob().getParents().addAll(parents);
+                chainsTo.remove(jobId);
             }
 
             getParents(chainsTo, child, pipeline);
         }
     }
 
-    private static Collection<StepContext> getParents(Collection<IStepDescriptor> stepDescs, PipelineContext pipeline) {
+    private static Collection<String> getParents(Collection<Job> stepDescs, Pipeline pipeline) {
         return stepDescs.stream()
-                .map((s) -> pipeline.getStepsContexts().get(s.getId()))
+                .map((s) -> pipeline.getJobById(s.getId()).getId())
                 .collect(Collectors.toList());
     }
 
-    private static void addToGraphIfAbsent(Collection<ExecutionNode> graph, StepContext root, StepContext child) {
+    private static void addToGraphIfAbsent(Collection<ExecutionNode> graph, Job root, Job child) {
         for (ExecutionNode executionNode : graph) {
-            if (executionNode.getStepContext().equals(root)) {
+            if (executionNode.getJob().equals(root)) {
                 if (notContainsNode(child, executionNode.getChilds()))
                     executionNode.getChilds().add(new ExecutionNode(child));
             } else {
@@ -134,64 +127,65 @@ public class TopologicSorter {
         }
     }
 
-    private static boolean notContainsNode(StepContext child, Collection<ExecutionNode> graph) {
+    private static boolean notContainsNode(Job child, Collection<ExecutionNode> graph) {
         return graph.stream()
-                    .noneMatch((e) -> e.getStepContext().equals(child));
+                    .noneMatch((e) -> e.getJob().equals(child));
     }
 
-    private static Collection<ExecutionNode> getRootJobs(PipelineContext pipeline, List<IStepDescriptor> roots) {
-        Collection<ExecutionNode> executionNodes = new LinkedList<>();
+    private static List<ExecutionNode> getRootJobs(List<Job> roots) {
+        List<ExecutionNode> executionNodes = new LinkedList<>();
 
-        for (IStepDescriptor step : roots) {
-            ExecutionNode executionNode = new ExecutionNode(pipeline.getStepsContexts().get(step.getId()));
+        for (Job job : roots) {
+            ExecutionNode executionNode = new ExecutionNode(job);
             executionNodes.add(executionNode);
         }
 
         return executionNodes;
     }
 
-    private static List<IStepDescriptor> getRoots(Collection<IStepDescriptor> steps) {
-        List<IStepDescriptor> rootSteps = new LinkedList<>();
-        for (IStepDescriptor step : steps) {
-            Collection<ChainInputDescriptor> chainInputs = getChainInputs(step);
+    private static List<Job> getRoots(Collection<Job> jobs) {
+        List<Job> rootJobs = new LinkedList<>();
+        for (Job job : jobs) {
+            Collection<Input> chainInputs = getChainInputs(job);
             if (chainInputs.isEmpty())
-                rootSteps.add(step);
+                rootJobs.add(job);
         }
-        return rootSteps;
+        return rootJobs;
     }
 
-    private static Map<String, Collection<IStepDescriptor>> getChainTo(Collection<IStepDescriptor> steps) {
-        Map<String, Collection<IStepDescriptor>> chainTo = new HashMap<>();
-        for (IStepDescriptor step : steps) {
-            for (IStepDescriptor stepInside : steps) {
-                String stepName = stepInside.getId();
-                if (stepName.equals(step.getId()))
+    private static Map<String, Collection<Job>> getChainTo(Collection<Job> jobs) {
+        Map<String, Collection<Job>> chainTo = new HashMap<>();
+        for (Job jobInside : jobs) {
+            Collection<Input> chainInputs = getChainInputs(jobInside);
+            if (chainInputs.isEmpty())
+                continue;
+
+            for (Job job : jobs) {
+                String stepName = jobInside.getId();
+                if (stepName.equals(job.getId()))
                     continue;
-                Collection<ChainInputDescriptor> chainInputs = getChainInputs(stepInside);
-                if (chainInputs.isEmpty())
-                    continue;
-                if(isChainStep(step.getId(), chainInputs)) {
+                if(isChainStep(job.getId(), chainInputs)) {
                     chainTo.computeIfAbsent(stepName, k -> new LinkedList<>());
-                    chainTo.get(stepName).add(step);
+                    chainTo.get(stepName).add(job);
                 }
             }
         }
         return chainTo;
     }
 
-    private static Map<String, Collection<IStepDescriptor>> getChainFrom(Collection<IStepDescriptor> steps) {
-        Map<String, Collection<IStepDescriptor>> chainFrom = new HashMap<>();
-        for (IStepDescriptor step : steps) {
-            String stepName = step.getId();
-            for (IStepDescriptor stepInside : steps) {
-                if (stepName.equals(stepInside.getId()))
+    private static Map<String, Collection<Job>> getChainFrom(Collection<Job> jobs) {
+        Map<String, Collection<Job>> chainFrom = new HashMap<>();
+        for (Job job : jobs) {
+            String jobName = job.getId();
+            for (Job jobInside : jobs) {
+                if (jobName.equals(jobInside.getId()))
                     continue;
-                Collection<ChainInputDescriptor> chainInputs = getChainInputs(stepInside);
+                Collection<Input> chainInputs = getChainInputs(jobInside);
                 if (chainInputs.isEmpty())
                     continue;
-                if(isChainStep(stepName, chainInputs)) {
-                    chainFrom.computeIfAbsent(stepName, k -> new LinkedList<>());
-                    chainFrom.get(stepName).add(stepInside);
+                if(isChainStep(jobName, chainInputs)) {
+                    chainFrom.computeIfAbsent(jobName, k -> new LinkedList<>());
+                    chainFrom.get(jobName).add(jobInside);
                 }
             }
 
@@ -199,19 +193,19 @@ public class TopologicSorter {
         return chainFrom;
     }
 
-    private static boolean isChainStep(String stepName, Collection<ChainInputDescriptor> chainInputs) {
-        for (ChainInputDescriptor input : chainInputs) {
-            if(input.getStepId().equals(stepName))
+    private static boolean isChainStep(String stepName, Collection<Input> chainInputs) {
+        for (Input input : chainInputs) {
+            if(input.getOriginStep().equals(stepName))
                 return true;
         }
         return false;
     }
 
-    private static Collection<ChainInputDescriptor> getChainInputs(IStepDescriptor step) {
-        Collection<ChainInputDescriptor> chainInputs = new LinkedList<>();
-        for (IInputDescriptor input : step.getInputs())
-            if (input instanceof ChainInputDescriptor)
-                chainInputs.add((ChainInputDescriptor) input);
+    private static Collection<Input> getChainInputs(Job job) {
+        Collection<Input> chainInputs = new LinkedList<>();
+        for (Input input : job.getInputs())
+            if (!input.getOriginStep().equals(job.getId()))
+                chainInputs.add(input);
         return chainInputs;
     }
 }

@@ -1,25 +1,32 @@
 package pt.isel.ngspipes.engine_core.utils;
 
-import pt.isel.ngspipes.engine_core.entities.*;
-import pt.isel.ngspipes.engine_core.entities.contexts.ComposeStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.SimpleStepContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.StepContext;
+import pt.isel.ngspipes.engine_core.entities.ExecutionState;
+import pt.isel.ngspipes.engine_core.entities.StateEnum;
+import pt.isel.ngspipes.engine_core.entities.contexts.Job;
+import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
+import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.exception.InputValidationException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IPipelineRepositoryDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IRepositoryDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.repository.IToolRepositoryDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.ISpreadDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.ICombineStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IInputStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IStrategyDescriptor;
+import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
 import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IOutputDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IParameterDescriptor;
+import pt.isel.ngspipes.tool_descriptor.interfaces.IToolDescriptor;
+import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 
 import java.io.File;
 import java.util.AbstractMap;
@@ -29,27 +36,24 @@ import java.util.Map;
 
 public class ValidateUtils {
 
-    public static void validateSteps(PipelineContext pipeline) throws EngineException {
+    public static void validateSteps(IPipelineDescriptor pipelineDescriptor,
+                                     Map<String, Object> parameters) throws EngineException {
 
-        for (Map.Entry<String, StepContext> entry : pipeline.getStepsContexts().entrySet()) {
-            StepContext stepCtx = entry.getValue();
-            IStepDescriptor step = stepCtx.getStep();
-
+        for (IStepDescriptor step : pipelineDescriptor.getSteps()) {
             if (step.getSpread() != null)
                 validateSpread(step.getId(), step.getInputs(), step.getSpread());
 
-            if (stepCtx instanceof ComposeStepContext) {
-                validatePipelineStep(((ComposeStepContext) stepCtx), pipeline);
+            if (!(step.getExec() instanceof ICommandExecDescriptor)) {
+                validatePipelineStep(step, pipelineDescriptor, parameters);
             } else {
-                validateCommandStep(((SimpleStepContext) stepCtx), pipeline);
+                validateCommandStep(step, pipelineDescriptor, parameters);
             }
-
         }
     }
 
-    public static void validateOutputs(PipelineContext pipeline) throws EngineException {
-        validateNoDuplicatedOutputsIds(pipeline);
-        validateOutputsExistence(pipeline);
+    public static void validateOutputs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters) throws EngineException {
+        validateNoDuplicatedOutputsIds(pipelineDesc);
+        validateOutputsExistence(pipelineDesc, parameters);
     }
 
     public static void validateRepositories(Collection<IRepositoryDescriptor> repositories) throws EngineException {
@@ -62,40 +66,40 @@ public class ValidateUtils {
         }
     }
 
-    public static void validateNonCyclePipeline(PipelineContext pipeline) throws EngineException {
+    public static void validateNonCyclePipeline(IPipelineDescriptor pipelineDescriptor, Map<String, Object> params) throws EngineException {
         Collection<Map.Entry<String, String>> previousPipelines = new LinkedList<>();
-        validateNonCycle(pipeline, null, previousPipelines);
+        validateNonCycle(pipelineDescriptor,null, previousPipelines, params);
     }
 
-    public static void validatePipelineState(PipelineContext pipelineContext) throws EngineException {
-        ExecutionState executionState = pipelineContext.getState();
+    public static void validatePipelineState(Pipeline pipeline) throws EngineException {
+        ExecutionState executionState = pipeline.getState();
         if (executionState.getState().equals(StateEnum.FAILED))
             throw executionState.getException();
     }
 
-    public static void validateResources(StepContext stepContext, PipelineContext pipeline) throws EngineException {
+    public static void validateResources(Job job, Pipeline pipeline) throws EngineException {
         int processors = Runtime.getRuntime().availableProcessors();
         long memory = Runtime.getRuntime().freeMemory();
-        long disk = new File(stepContext.getEnvironment().getOutputsDirectory()).getFreeSpace();
-        String executionId = pipeline.getExecutionId();
+        long disk = new File(job.getEnvironment().getOutputsDirectory()).getFreeSpace();
+        String executionId = pipeline.getName();
 
-        if (processors < stepContext.getEnvironment().getCpu() ||
-                processors < pipeline.getPipelineEnvironment().getCpu())
-            throw new EngineException("Needed cpus aren't available to execute step: " + stepContext.getId()
+        if (processors < job.getEnvironment().getCpu() ||
+                processors < pipeline.getEnvironment().getCpu())
+            throw new EngineException("Needed cpus aren't available to execute step: " + job.getId()
                     + " from pipeline: " + executionId);
 
-        if (memory < stepContext.getEnvironment().getMemory() * 1024 ||
-                memory < pipeline.getPipelineEnvironment().getMemory() * 1024)
-            throw new EngineException("Needed memory isn't available to execute step: " + stepContext.getId()
+        if (memory < job.getEnvironment().getMemory() * 1024 ||
+                memory < pipeline.getEnvironment().getMemory() * 1024)
+            throw new EngineException("Needed memory isn't available to execute step: " + job.getId()
                     + " from pipeline: " + executionId);
 
-        if (disk < stepContext.getEnvironment().getDisk() * 1024 * 1024 ||
-                disk < pipeline.getPipelineEnvironment().getDisk() * 1024 * 1024)
-            throw new EngineException("Needed disk space isn't available to execute step: " + stepContext.getId()
+        if (disk < job.getEnvironment().getDisk() * 1024 * 1024 ||
+                disk < pipeline.getEnvironment().getDisk() * 1024 * 1024)
+            throw new EngineException("Needed disk space isn't available to execute step: " + job.getId()
                     + " from pipeline: " + executionId);
     }
 
-    public static void validateInputValues(Map<String, Collection<String>> inputsValues, String first, String second) throws EngineException {
+    static void validateInputValues(Map<String, Collection<String>> inputsValues, String first, String second) throws EngineException {
         int sizeFirst = inputsValues.get(first).size();
         int sizeSecond = inputsValues.get(second).size();
         if (sizeFirst != sizeSecond)
@@ -109,11 +113,13 @@ public class ValidateUtils {
     }
 
     private static void validateSpreadStrategyInputsExistence(String stepId, ISpreadDescriptor spread) throws EngineException {
-        if (spread.getInputsToSpread().size() < 2)
-            throw new EngineException("Inputs to spread must be at least 2.");
-        int count = validateStrategyInput(stepId, spread.getInputsToSpread(), spread.getStrategy());
-        if (spread.getInputsToSpread().size() < count)
-            throw new EngineException("Inputs to spread must be " + count + ".");
+        if (spread.getStrategy() != null) {
+            if (spread.getInputsToSpread().size() < 2)
+                throw new EngineException("Inputs to spread must be at least 2.");
+            int count = validateStrategyInput(stepId, spread.getInputsToSpread(), spread.getStrategy());
+            if (spread.getInputsToSpread().size() < count)
+                throw new EngineException("Inputs to spread must be " + count + ".");
+        }
     }
 
     private static int validateStrategyInput(String stepId, Collection<String> inputsToSpread,
@@ -126,15 +132,15 @@ public class ValidateUtils {
             int count = validateStrategyInput(stepId, inputsToSpread, combined.getFirstStrategy());
             return count + validateStrategyInput(stepId, inputsToSpread, combined.getSecondStrategy());
         } else if (strategy instanceof IInputStrategyDescriptor) {
-            validateInput(stepId, inputsToSpread, (IInputStrategyDescriptor) strategy);
+            validateInputWithinToSpread(stepId, inputsToSpread, (IInputStrategyDescriptor) strategy);
             return 1;
         }
 
         return 0;
     }
 
-    private static void validateInput(String stepId, Collection<String> inputsToSpread,
-                                      IInputStrategyDescriptor strategy) throws EngineException {
+    private static void validateInputWithinToSpread(String stepId, Collection<String> inputsToSpread,
+                                                    IInputStrategyDescriptor strategy) throws EngineException {
         String inputName = strategy.getInputName();
         if (!inputsToSpread.contains(inputName))
             throw new EngineException("Error validating spread on step:" + stepId + ".Strategy input " + inputName
@@ -151,60 +157,72 @@ public class ValidateUtils {
         }
     }
 
-    private static void validatePipelineStep(ComposeStepContext stepCtx, PipelineContext pipeline) throws EngineException {
-        IPipelineDescriptor stepPipelineDescriptor = stepCtx.getPipelineDescriptor();
-        PipelineContext subPipeline = ContextFactory.create(pipeline.getExecutionId(), stepPipelineDescriptor,
-                pipeline.getParameters(), new Arguments(),
-                stepCtx.getEnvironment().getWorkDirectory());
-        validateSteps(subPipeline);
+    private static void validatePipelineStep(IStepDescriptor step, IPipelineDescriptor pipelineDescriptor,
+                                             Map<String, Object> parameters) throws EngineException {
+        IPipelineDescriptor pipelineDesc = DescriptorsUtils.getPipelineDescriptor(pipelineDescriptor, parameters, step);
+        validateSteps(pipelineDesc, parameters);
     }
 
-    private static void validateCommandStep(SimpleStepContext stepCtx, PipelineContext pipeline) throws EngineException {
-        IStepDescriptor step = stepCtx.getStep();
-        ICommandDescriptor commandDescriptor = stepCtx.getCommandDescriptor();
+    private static void validateCommandStep(IStepDescriptor stepCtx, IPipelineDescriptor pipelineDesc,
+                                            Map<String, Object> parameters) throws EngineException {
+        IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
+        assert step != null;
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, parameters);
 
         for (IParameterDescriptor parameterDescriptor : commandDescriptor.getParameters()) {
             IInputDescriptor input = DescriptorsUtils.getInputByName(step.getInputs(), parameterDescriptor.getName());
 
-            validateInput(stepCtx, pipeline, commandDescriptor, parameterDescriptor, input);
+            validateInput(step, commandDescriptor, parameterDescriptor, input, pipelineDesc, parameters);
         }
     }
 
-    private static void validateInput(SimpleStepContext stepCtx, PipelineContext pipeline,
-                                      ICommandDescriptor commandDescriptor, IParameterDescriptor parameterDescriptor,
-                                      IInputDescriptor input) throws EngineException {
-        validateMandatory(stepCtx, pipeline, commandDescriptor, parameterDescriptor, input);
+    private static void validateInput(IStepDescriptor step,  ICommandDescriptor commandDescriptor,
+                                      IParameterDescriptor parameterDescriptor, IInputDescriptor input,
+                                      IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
+        validateMandatory(step, commandDescriptor, parameterDescriptor, input, parameters);
         if (input != null)
-            validateInputType(pipeline, stepCtx, parameterDescriptor, input);
+            validateInputType(step, parameterDescriptor, input, pipelineDescriptor, commandDescriptor, parameters);
     }
 
-    private static void validateMandatory(SimpleStepContext stepCtx, PipelineContext pipeline,
-                                          ICommandDescriptor commandDescriptor, IParameterDescriptor parameterDescriptor,
-                                          IInputDescriptor input) throws EngineException {
+    private static void validateMandatory(IStepDescriptor step, ICommandDescriptor commandDescriptor,
+                                          IParameterDescriptor parameterDescriptor, IInputDescriptor input,
+                                          Map<String, Object> parameters) throws EngineException {
         String depends = parameterDescriptor.getDepends();
         if (depends != null && !depends.isEmpty()) {
-            validateDependent(stepCtx.getStep(), commandDescriptor.getParameters(), parameterDescriptor, input, pipeline.getParameters());
+            validateDependent(step, commandDescriptor.getParameters(), parameterDescriptor, input, parameters);
         } else {
-            validateRequired(stepCtx.getStep(), parameterDescriptor, input);
+            validateRequired(step, parameterDescriptor, input);
         }
     }
 
-    private static void validateInputType(PipelineContext pipeline, SimpleStepContext stepCtx,
-                                          IParameterDescriptor parameterDescriptor, IInputDescriptor input) throws EngineException {
+    private static void validateInputType(IStepDescriptor step, IParameterDescriptor parameterDescriptor,
+                                          IInputDescriptor input, IPipelineDescriptor pipeDesc,
+                                          ICommandDescriptor commandDescriptor, Map<String, Object> parameters) throws EngineException {
         String paramType = parameterDescriptor.getType();
 
         if (paramType.equals("composed")) {
-            validateComposedInput(stepCtx.getStep().getInputs(), parameterDescriptor);
+            validateComposedInput(step.getInputs(), parameterDescriptor);
             return;
         }
 
-        if (stepCtx.getStep().getSpread() != null && stepCtx.getStep().getSpread().getInputsToSpread().contains(input.getInputName()))
+        if (step.getSpread() != null && step.getSpread().getInputsToSpread().contains(input.getInputName()))
             paramType += "[]";
 
         if (input instanceof IChainInputDescriptor) {
-            validateChainInputType(pipeline, paramType, input);
+            IStepDescriptor stepDesc = DescriptorsUtils.getStepById(pipeDesc, ((IChainInputDescriptor) input).getStepId());
+            IExecDescriptor exec = stepDesc.getExec();
+            String repoId = exec.getRepositoryId();
+            String stepId = stepDesc.getId();
+            if (exec instanceof ICommandExecDescriptor) {
+                IToolRepositoryDescriptor toolsRepoDesc = DescriptorsUtils.getToolRepositoryDescriptorById(repoId, pipeDesc.getRepositories());
+                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
+                ICommandExecDescriptor exec1 = (ICommandExecDescriptor) exec;
+                IToolDescriptor toolDesc = DescriptorsUtils.getTool(toolsRepo, exec1.getToolName(), stepId);
+                ICommandDescriptor cmdDesc = DescriptorsUtils.getCommandByName(toolDesc.getCommands(), exec1.getCommandName());
+                validateChainInputType(paramType, input, pipeDesc, cmdDesc, parameters);
+            }
         } else {
-            Object inputValue = DescriptorsUtils.getInputValue(input, pipeline.getParameters());
+            Object inputValue = DescriptorsUtils.getInputValue(input, parameters);
             validateInput(parameterDescriptor.getName(), paramType, inputValue);
         }
     }
@@ -217,34 +235,38 @@ public class ValidateUtils {
         }
     }
 
-    private static void validateChainInputType(PipelineContext pipeline, String paramType, IInputDescriptor input) throws EngineException {
+    private static void validateChainInputType(String paramType, IInputDescriptor input, IPipelineDescriptor pipelineDescriptor,
+                                               ICommandDescriptor commandDescriptor, Map<String, Object> parameters) throws EngineException {
         IChainInputDescriptor chainInput = (IChainInputDescriptor) input;
-        StepContext stepCtx = pipeline.getStepsContexts().get(chainInput.getStepId());
+
+        IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDescriptor, chainInput.getStepId());
 
         String oputputType;
 
-        if (stepCtx instanceof SimpleStepContext) {
-            oputputType = getOutputTypeFromTool(chainInput, (SimpleStepContext) stepCtx);
+        assert step != null;
+        if (step.getExec() instanceof ICommandExecDescriptor) {
+            oputputType = getOutputTypeFromTool(chainInput, commandDescriptor);
         } else {
-            oputputType = getOutputTypeFromPipeline(pipeline, chainInput, stepCtx.getStep().getId());
+            oputputType = getOutputTypeFromPipeline(chainInput, commandDescriptor, pipelineDescriptor, parameters);
         }
         if (!paramType.equals(oputputType) && (paramType.equalsIgnoreCase("file_prefix") && !oputputType.contains("file")))
             throw new EngineException("Chained input: " + input.getInputName() + " type doesn't verify with output: "
                     + oputputType + " type.");
     }
 
-    private static String getOutputTypeFromPipeline(PipelineContext pipeline, IChainInputDescriptor chainInput,
-                                                    String stepId) throws EngineException {
+    private static String getOutputTypeFromPipeline(IChainInputDescriptor chainInput, ICommandDescriptor commandDescriptor,
+                                                    IPipelineDescriptor pipelineDescriptor, Map<String, Object> params) throws EngineException {
 
-        PipelineContext currPipeline = ContextFactory.createSubPipeline(stepId, pipeline);
-        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor output : pipeline.getDescriptor().getOutputs()) {
+        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor output : pipelineDescriptor.getOutputs()) {
             if (output.getOutputName().equals(chainInput.getOutputName())) {
-                StepContext insideStepCtx = currPipeline.getStepsContexts().get(output.getStepId());
-                if (insideStepCtx instanceof SimpleStepContext) {
-                    return getOutputTypeFromTool(chainInput, (SimpleStepContext) insideStepCtx);
+                IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDescriptor, output.getStepId());
+                if (step instanceof SimpleJob) {
+                    return getOutputTypeFromTool(chainInput, commandDescriptor);
                 } else {
-                    PipelineContext nextPipeline = ContextFactory.createSubPipeline(insideStepCtx.getStep().getId(), pipeline);
-                    return getOutputTypeFromPipeline(nextPipeline, chainInput, insideStepCtx.getStep().getId());
+                    assert step != null;
+                    IPipelineDescriptor pipelineDesc = DescriptorsUtils.getPipelineDescriptor(pipelineDescriptor, params, step);
+                    ICommandDescriptor cmdDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, params);
+                    return getOutputTypeFromPipeline(chainInput, cmdDescriptor, pipelineDesc, params);
                 }
             }
         }
@@ -252,18 +274,16 @@ public class ValidateUtils {
         throw new EngineException("Error validating chain input " + chainInput.getInputName());
     }
 
-    private static String getOutputTypeFromTool(IChainInputDescriptor chainInput,
-                                                SimpleStepContext stepCtx) throws EngineException {
-        ICommandDescriptor command = stepCtx.getCommandDescriptor();
-        IOutputDescriptor output = DescriptorsUtils.getOutputFromCommand(command, chainInput.getOutputName());
+    private static String getOutputTypeFromTool(IChainInputDescriptor chainInput, ICommandDescriptor cmdDesc) throws EngineException {
+        IOutputDescriptor output = DescriptorsUtils.getOutputFromCommand(cmdDesc, chainInput.getOutputName());
         return output.getType();
     }
 
-    private static void validateNonCycle(PipelineContext pipeline, IPipelineRepositoryDescriptor pipelineRepoDesc,
-                                         Collection<Map.Entry<String, String>> previousPipelines) throws EngineException {
+    private static void validateNonCycle(IPipelineDescriptor pipelineDesc, IPipelineRepositoryDescriptor pipelineRepoDesc,
+                                         Collection<Map.Entry<String, String>> previousPipelines, Map<String, Object> params) throws EngineException {
 
         if (pipelineRepoDesc != null) {
-            String pipelineName = pipeline.getDescriptor().getName();
+            String pipelineName = pipelineDesc.getName();
             String location = pipelineRepoDesc.getLocation();
 
             AbstractMap.SimpleEntry<String, String> currentPipeline = new AbstractMap.SimpleEntry<>(pipelineName, location);
@@ -273,18 +293,15 @@ public class ValidateUtils {
                 previousPipelines.add(currentPipeline);
         }
 
-        for (Map.Entry<String, StepContext> entry : pipeline.getStepsContexts().entrySet()) {
-            StepContext stepCtx = entry.getValue();
-
-            if (stepCtx instanceof ComposeStepContext) {
-
-                IPipelineDescriptor subPipelineDesc = ((ComposeStepContext) stepCtx).getPipelineDescriptor();
-                String workDirectory = stepCtx.getEnvironment().getWorkDirectory();
-                Map<String, Object> parameters = pipeline.getParameters();
-                Arguments arguments = new Arguments();
-                PipelineContext subPipeline = ContextFactory.create(pipeline.getExecutionId(), subPipelineDesc,
-                        parameters, arguments, workDirectory);
-                validateNonCycle(subPipeline, pipelineRepoDesc, new LinkedList<>(previousPipelines));
+        for (IStepDescriptor step : pipelineDesc.getSteps()) {
+            if (step.getExec() instanceof IPipelineExecDescriptor) {
+                IPipelineExecDescriptor exec = (IPipelineExecDescriptor) step.getExec();
+                Collection<IRepositoryDescriptor> repositories = pipelineDesc.getRepositories();
+                IPipelineRepositoryDescriptor repoDesc = DescriptorsUtils.getPipelineRepositoryDescribtorById(exec.getRepositoryId(), repositories);
+                assert repoDesc != null;
+                IPipelinesRepository pipeRepo = RepositoryUtils.getPipelinesRepository(repoDesc, params);
+                IPipelineDescriptor subPipeDesc = DescriptorsUtils.getPipelineDescriptor(pipeRepo, exec.getPipelineName());
+                validateNonCycle(subPipeDesc, repoDesc, new LinkedList<>(previousPipelines), params);
             }
         }
     }
@@ -303,67 +320,70 @@ public class ValidateUtils {
         return cycle.toString();
     }
 
-    private static void validateOutputsExistence(PipelineContext pipeline) throws EngineException {
-
-        IPipelineDescriptor pipelineDescriptor = pipeline.getDescriptor();
+    private static void validateOutputsExistence(IPipelineDescriptor pipelineDescriptor,
+                                                 Map<String, Object> parameters) throws EngineException {
 
         for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDescriptor : pipelineDescriptor.getOutputs()) {
 
-            StepContext stepCtx = pipeline.getStepsContexts().get(outputDescriptor.getStepId());
+            IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDescriptor, outputDescriptor.getStepId());
             String outputName = outputDescriptor.getOutputName();
 
-            if (stepCtx instanceof SimpleStepContext) {
-                validateExistenceOutputOnCommandStep((SimpleStepContext) stepCtx, outputName);
-            } else if (stepCtx instanceof ComposeStepContext) {
-                validateExistenceOutputOnPipelineStep((ComposeStepContext) stepCtx, outputName);
+            assert step != null;
+            if (step.getExec() instanceof ICommandExecDescriptor) {
+                validateExistenceOutputOnCommandStep(step, outputName, pipelineDescriptor, parameters);
+            } else if (step instanceof IPipelineExecDescriptor) {
+                validateExistenceOutputOnPipelineStep(step, outputName, pipelineDescriptor, parameters);
             } else {
                 throw new EngineException("No existent implementation was found for verifying output " + outputDescriptor.getName());
             }
         }
     }
 
-    private static void validateExistenceOutputOnPipelineStep(ComposeStepContext stepCtx, String outputName) {
-        IPipelineDescriptor stepPipelineDescriptor = stepCtx.getPipelineDescriptor();
-        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor output : stepPipelineDescriptor.getOutputs())
-            if (output.getOutputName().equals(outputName))
-                break;
+    private static void validateExistenceOutputOnPipelineStep(IStepDescriptor step, String outputName, IPipelineDescriptor pipelineDesc,
+                                                              Map<String, Object> parameters) throws EngineException {
+
+        IPipelineDescriptor pipeDesc = DescriptorsUtils.getPipelineDescriptor(pipelineDesc, parameters, step);
+        if (pipeDesc.getOutputs().stream().anyMatch( (out) -> out.getName().equals(outputName)))
+            return;
+        throw new EngineException("Output " + outputName + " doesn't exist on pipeline." + step.getId());
     }
 
-    private static void validateExistenceOutputOnCommandStep(SimpleStepContext stepCtx, String outputName) throws EngineException {
-        IOutputDescriptor output = DescriptorsUtils.getOutputFromCommand(stepCtx.getCommandDescriptor(), outputName);
+    private static void validateExistenceOutputOnCommandStep(IStepDescriptor step, String outputName, IPipelineDescriptor pipelineDesc,
+                                                             Map<String, Object> parameters) throws EngineException {
+
+        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, parameters);
+        IOutputDescriptor output = DescriptorsUtils.getOutputFromCommand(commandDescriptor, outputName);
 
         if (output.getValue().contains("$"))
-            validateDependentOutput(output, stepCtx);
+            validateDependentOutput(output, step);
     }
 
-    private static void validateDependentOutput(IOutputDescriptor output, SimpleStepContext stepCtx) throws EngineException {
+    private static void validateDependentOutput(IOutputDescriptor output, IStepDescriptor step) throws EngineException {
 
         String outputValue = output.getValue();
 
         if (outputValue.indexOf("$") != outputValue.lastIndexOf("$")) {
             String[] splittedByDependency = outputValue.split("$");
             for (String val : splittedByDependency) {
-                validateExistentOfDependentInput(stepCtx, val);
+                validateExistentOfDependentInput(step, val);
             }
         } else {
             String val = outputValue.substring(outputValue.indexOf("$") + 1);
-            validateExistentOfDependentInput(stepCtx, val);
+            validateExistentOfDependentInput(step, val);
         }
-
-
     }
 
-    private static void validateExistentOfDependentInput(SimpleStepContext stepCtx, String str) throws EngineException {
-        boolean contains = isOutputDependentInputSpecified(str, stepCtx.getStep().getInputs());
+    private static void validateExistentOfDependentInput(IStepDescriptor step, String str) throws EngineException {
+        boolean contains = isOutputDependentInputSpecified(str, step.getInputs());
         if (!contains)
             throw new EngineException("Error validating output, dependent input wasn't specified.");
 
     }
 
-    private static void validateNoDuplicatedOutputsIds(PipelineContext pipeline) throws EngineException {
+    private static void validateNoDuplicatedOutputsIds(IPipelineDescriptor pipelineDescriptor) throws EngineException {
         Collection<String> outputsIds = new LinkedList<>();
 
-        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDescriptor : pipeline.getDescriptor().getOutputs()) {
+        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDescriptor : pipelineDescriptor.getOutputs()) {
             if (outputsIds.contains(outputDescriptor.getOutputName()))
                 throw new EngineException("Outputs ids can be duplicated. Id: " + outputDescriptor.getOutputName() + " is duplicated.");
             outputsIds.add(outputDescriptor.getName());
@@ -416,11 +436,15 @@ public class ValidateUtils {
         return contains;
     }
 
-    public static boolean isOutputDependentInputTypeNoPrimitive(String value, SimpleStepContext step) {
+    public static boolean isOutputDependentInputTypeNoPrimitive(String value, IStepDescriptor step, IPipelineDescriptor pipelineDesc,
+                                                                Map<String, Object> params) throws EngineException {
         boolean nonPrimitive = false;
-        for (IInputDescriptor input : step.getStep().getInputs()) {
-            IParameterDescriptor param = DescriptorsUtils.getParameterById(step.getCommandDescriptor().getParameters(), input.getInputName());
-            if (value.contains(input.getInputName()) && (param.getType().equalsIgnoreCase("file") || param.getType().equalsIgnoreCase("directory"))) {
+        for (IInputDescriptor input : step.getInputs()) {
+            ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, params);
+            IParameterDescriptor param = DescriptorsUtils.getParameterById(commandDescriptor.getParameters(), input.getInputName());
+            assert param != null;
+            if (value.contains(input.getInputName()) && (param.getType().equalsIgnoreCase("file")
+                || param.getType().equalsIgnoreCase("directory"))) {
                 nonPrimitive = true;
             }
         }

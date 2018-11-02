@@ -1,15 +1,12 @@
 package pt.isel.ngspipes.engine_core.commandBuilders;
 
 import pt.isel.ngspipes.engine_core.entities.Environment;
-import pt.isel.ngspipes.engine_core.entities.contexts.PipelineContext;
-import pt.isel.ngspipes.engine_core.entities.contexts.SimpleStepContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.ExecutionContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
+import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
-import pt.isel.ngspipes.engine_core.utils.IOUtils;
-import pt.isel.ngspipes.tool_descriptor.interfaces.IExecutionContextDescriptor;
 
 import java.io.File;
-import java.io.IOException;
-import java.util.HashMap;
 import java.util.Map;
 
 public class DockerCommandBuilder extends CommandBuilder {
@@ -21,27 +18,24 @@ public class DockerCommandBuilder extends CommandBuilder {
     private static final String DOCKER_IMG_TAG_KEY = "tag";
 
     @Override
-    public String build(PipelineContext pipelineContext, String stepId) throws CommandBuilderException {
-        SimpleStepContext stepCtx = (SimpleStepContext) pipelineContext.getStepsContexts().get(stepId);
+    public String build(Pipeline pipeline, String stepId) throws CommandBuilderException {
+        SimpleJob stepCtx = (SimpleJob) pipeline.getJobById(stepId);
         Environment environment = stepCtx.getEnvironment();
-        IExecutionContextDescriptor execContext = stepCtx.getExecutionContextDescriptor();
-        String dockerImage = getDockerImageName(execContext, stepId);
-        String executionCommand = buildCommand(pipelineContext, stepId, this::getDockerInputValue);
-        String command = String.format(DOCKER_CMD, environment.getOutputsDirectory(),
-                                        pipelineContext.getPipelineEnvironment().getWorkDirectory(),
+        String dockerImage = getDockerImageName(stepCtx.getExecutionContext());
+        String executionCommand = buildCommand(pipeline, stepId, this::getDockerInputValue);
+        return String.format(DOCKER_CMD, environment.getOutputsDirectory(),
+                                            pipeline.getEnvironment().getWorkDirectory(),
                                         dockerImage, executionCommand);
-        return command;
     }
 
-    private Object getDockerInputValue(SimpleStepContext stepCtx, Object value) {
-        String valStr = value.toString();
+    private String getDockerInputValue(SimpleJob stepCtx, String value) {
         String separator = File.separatorChar + "";
-        int begin = valStr.lastIndexOf(separator);
-        String inputName = valStr.substring(begin + 1);
+        int begin = value.lastIndexOf(separator);
+        String inputName = value.substring(begin + 1);
         return separator + "sharedInputs" + separator + stepCtx.getId() + separator + inputName;
     }
 
-    private String getDockerImageName(IExecutionContextDescriptor execContext, String stepId) throws CommandBuilderException {
+    private String getDockerImageName(ExecutionContext execContext) throws CommandBuilderException {
         Map<String, Object> config = execContext.getConfig();
         if (!config.containsKey(DOCKER_IMG_NAME_KEY))
             throw new CommandBuilderException("Docker execution context must contain a configuration (uri) specifying docker image.");

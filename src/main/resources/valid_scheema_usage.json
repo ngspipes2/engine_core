@@ -1,0 +1,41 @@
+{
+  "name": "pipeline1",
+  "jobs": [
+    {
+     "name": "trimmomatic",
+     "command" : "java -jar /trimmomatic.0.33.jar",
+     "inputs" : [
+       {
+         "name": "mode",
+         "type": "string",
+         "value": "SE"
+       },
+       {
+         "name": "outFile",
+         "type": "string",
+         "value": "filtered.fastq"
+       }
+      ],
+      "outputs": [
+        {
+          "name": "outputFile",
+          "type": "file",
+          "value": "$outFile"
+        }
+      ],
+      "execution_context" : {
+          "context" : "Docker",
+          "config" : {
+            "uri" : "ngspipes/trimmomatic.033"
+          }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "outputFile",
+      "type": "file",
+      "value": "$outFile"
+    }
+  ]
+}

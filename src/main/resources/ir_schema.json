@@ -1,0 +1,84 @@
+  {
+      "$schema": "http://json-schema.org/draft-06/schema#",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "command": {"type": "string"},
+              "parents": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                 }
+               },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string" },
+                    "type": {"type": "string", "enum": ["file", "string", "directory", "file[]", "string[]", "directory[]", "File", "Directory", "File[]", "Directory[]", "composed", "enum", "float", "boolean", "int"] },
+                    "value": { "type": "string" }
+                  },
+                  "required": ["name", "type", "value"]
+                 }
+               },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string" },
+                    "type": {"type": "string", "enum": ["file", "string", "directory", "file[]", "string[]", "directory[]", "File", "Directory", "File[]", "Directory[]"] },
+                    "value": { "type": "string" },
+                    "used_by": { "type": "array", "items" : { "type" : "string" } }
+                  },
+                  "required": ["name", "type", "value"]
+                }
+              },
+              "spread": {
+                "type": "object",
+                "properties": {
+                  "inputs": { "type": "array", "items" : { "type" : "string" } },
+                  "strategy": { "type": "string" }
+                },
+                "required": ["inputs", "strategy"]
+              },
+              "executionContext": {
+                "type": "object",
+                "properties": {
+                  "context": { "type" : "string" },
+                  "config": { 
+                    "type": "object",
+                    "properties": {
+                      "uri": {"type": "string" },
+                      "tag": { "type": "string" }
+                    }
+                  }
+                },
+                "required": ["context", "config"]
+              }
+            },
+            "required": ["id","command","inputs","outputs","executionContext"]
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string" },
+              "type": {"type": "string", "enum": ["file", "string", "directory", "file[]", "string[]", "directory[]", "File", "Directory", "File[]", "Directory[]"] },
+              "value": { "type": "string" },
+              "used_by": { "type": "array", "items" : { "type" : "string" } }
+            },
+            "required": ["name", "type", "value"]
+          }
+        }
+       }
+    } 

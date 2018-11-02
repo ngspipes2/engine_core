@@ -24,4 +24,5 @@ public class Arguments {
         this.mem = mem;
         this.disk = disk;
     }
+
 }
