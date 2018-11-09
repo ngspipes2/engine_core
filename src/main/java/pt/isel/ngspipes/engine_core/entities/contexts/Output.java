@@ -30,7 +30,7 @@ public class Output {
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 
-    public String getOriginJob() { return originJobRef.getId(); }
+    public String getOriginJob() { return originJob; }
     public void setOriginJob(String originJob) { this.originJob = originJob; }
 
     public String getType() { return type; }

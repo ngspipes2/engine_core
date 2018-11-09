@@ -3,10 +3,7 @@ package pt.isel.ngspipes.engine_core.implementations;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.SftpException;
-import pt.isel.ngspipes.engine_core.entities.Environment;
-import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
-import pt.isel.ngspipes.engine_core.entities.ExecutionState;
-import pt.isel.ngspipes.engine_core.entities.StateEnum;
+import pt.isel.ngspipes.engine_core.entities.*;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
@@ -61,10 +58,20 @@ public class EngineMesos extends Engine {
     public EngineMesos() { super(WORK_DIRECTORY); }
 
     @Override
-    protected void stage(Pipeline pipeline) throws EngineException {
+    protected void stage(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException {
         copyPipelineInputs(pipeline);
         schedulePipeline(pipeline);
         pipeline.getState().setState(StateEnum.SCHEDULE);
+    }
+
+    @Override
+    List<String> getOutputValuessFromJob(String chainOutput, Job originJob) {
+        throw new NotImplementedException();
+    }
+
+    @Override
+    List<String> getOutputValuesFromMultipleJobs(String chainOutput, Job originJob) {
+        throw new NotImplementedException();
     }
 
     @Override

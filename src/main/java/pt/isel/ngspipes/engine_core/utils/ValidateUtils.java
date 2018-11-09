@@ -29,10 +29,7 @@ import pt.isel.ngspipes.tool_descriptor.interfaces.IToolDescriptor;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 
 import java.io.File;
-import java.util.AbstractMap;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.Map;
+import java.util.*;
 
 public class ValidateUtils {
 
@@ -99,7 +96,7 @@ public class ValidateUtils {
                     + " from pipeline: " + executionId);
     }
 
-    static void validateInputValues(Map<String, Collection<String>> inputsValues, String first, String second) throws EngineException {
+    static void validateInputValues(Map<String, List<String>> inputsValues, String first, String second) throws EngineException {
         int sizeFirst = inputsValues.get(first).size();
         int sizeSecond = inputsValues.get(second).size();
         if (sizeFirst != sizeSecond)

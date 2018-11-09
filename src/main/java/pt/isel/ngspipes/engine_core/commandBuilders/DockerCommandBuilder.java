@@ -2,6 +2,7 @@ package pt.isel.ngspipes.engine_core.commandBuilders;
 
 import pt.isel.ngspipes.engine_core.entities.Environment;
 import pt.isel.ngspipes.engine_core.entities.contexts.ExecutionContext;
+import pt.isel.ngspipes.engine_core.entities.contexts.Job;
 import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
 import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
@@ -28,10 +29,10 @@ public class DockerCommandBuilder extends CommandBuilder {
                                         dockerImage, executionCommand);
     }
 
-    private String getDockerInputValue(SimpleJob stepCtx, String value) {
+    private String getDockerInputValue(Job stepCtx, String value) {
         String separator = File.separatorChar + "";
         int begin = value.lastIndexOf(separator);
-        String inputName = value.substring(begin + 1);
+        String inputName = begin != -1 ? value.substring(begin + 1) : value;
         return separator + "sharedInputs" + separator + stepCtx.getId() + separator + inputName;
     }
 

@@ -1,6 +1,7 @@
 package pt.isel.ngspipes.engine_core.commandBuilders;
 
 import pt.isel.ngspipes.engine_core.entities.contexts.Input;
+import pt.isel.ngspipes.engine_core.entities.contexts.Job;
 import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
 import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
@@ -16,7 +17,7 @@ abstract class CommandBuilder implements ICommandBuilder {
     }
 
     String buildCommand(Pipeline pipeline, String stepId,
-                        TriFunction<SimpleJob, String, String> func) throws CommandBuilderException {
+                        TriFunction<Job, String, String> func) throws CommandBuilderException {
         SimpleJob stepCtx = (SimpleJob) pipeline.getJobById(stepId);
         StringBuilder sb = new StringBuilder(stepCtx.getCommand());
 
@@ -28,7 +29,7 @@ abstract class CommandBuilder implements ICommandBuilder {
         return sb.toString();
     }
 
-    String getChainFileValue(SimpleJob stepCtx, String value) {
+    String getChainFileValue(Job stepCtx, String value) {
         String separator = File.separatorChar + "";
         int begin = value.lastIndexOf(separator) != -1 ? value.lastIndexOf(separator) : value.lastIndexOf(separator);
         value = value.substring(begin + 1);
@@ -36,7 +37,7 @@ abstract class CommandBuilder implements ICommandBuilder {
     }
 
     private void setInputValue(Pipeline pipeline, String stepId, StringBuilder sb,
-                               Input input, TriFunction<SimpleJob, String, String> func)
+                               Input input, TriFunction<Job, String, String> func)
                                throws CommandBuilderException {
         SimpleJob stepCtx = (SimpleJob) pipeline.getJobById(stepId);
         String value = getInputValue(stepCtx, input, func);
@@ -61,22 +62,53 @@ abstract class CommandBuilder implements ICommandBuilder {
         sb.append(input.getSuffix());
     }
 
-    private String getInputValue(SimpleJob stepCtx, Input input, TriFunction<SimpleJob, String, String> func) throws CommandBuilderException {
+    private String getInputValue(SimpleJob job, Input input, TriFunction<Job, String, String> func) throws CommandBuilderException {
         String value = input.getValue();
         String type = input.getType();
-        if (type.equalsIgnoreCase("file") || (type.equalsIgnoreCase("directory") && !input.getOriginStep().equals(stepCtx.getId()))) {
-            value = getFileInputValue(stepCtx, func, value);
-        } else if (type.equalsIgnoreCase("flag")) {
-            value = "";
+
+        if (!input.getOriginStep().equals(job.getId())) {
+            value = getInputValueForChain(job, input, func, value, type);
+        } else {
+             if (type.equalsIgnoreCase("flag")) {
+                value = "";
+            }
         }
 
         return value;
     }
 
-    private String getFileInputValue(SimpleJob stepCtx, TriFunction<SimpleJob, String, String> func,
+    private String getInputValueForChain(SimpleJob job, Input input, TriFunction<Job, String, String> func,
+                                         String value, String type) throws CommandBuilderException {
+        if (type.equalsIgnoreCase("directory")) {
+            value = getFileInputValue(job, func, value);
+        } else if (type.equalsIgnoreCase("file")) {
+            value = getFileInputValue(job, func, value);
+        } else if (input.getOriginJob().getSpread() != null) {
+            value = getInputValueForSpread(job, input, func, value, type);
+        }
+        return value;
+    }
+
+    private String getInputValueForSpread(SimpleJob job, Input input, TriFunction<Job, String, String> func,
+                                          String value, String type) throws CommandBuilderException {
+        if (type.equalsIgnoreCase("file[]")) {
+            String[] splittedVals = value.split(",");
+            StringBuilder sb = new StringBuilder();
+            for (String val : splittedVals) {
+                sb.append(getFileInputValue(job, func, val)).append(",");
+            }
+            value = sb.toString();
+        } else if (!type.equalsIgnoreCase("string")) {
+            throw new CommandBuilderException("Input " + input.getName() + " build for incoming spread result and type "
+                                                + type + "not supported.");
+        }
+        return value;
+    }
+
+    private String getFileInputValue(Job job, TriFunction<Job, String, String> func,
                                      String value) throws CommandBuilderException {
         try {
-            value = func.apply(stepCtx, value);
+            value = func.apply(job, value);
         } catch (Exception e) {
             throw new CommandBuilderException("", e);
         }

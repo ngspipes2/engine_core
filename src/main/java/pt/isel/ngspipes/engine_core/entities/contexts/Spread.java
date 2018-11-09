@@ -6,14 +6,17 @@ import java.util.Collection;
 
 public class Spread {
 
-    private Collection<String> inputsToSpread;
+    private Collection<String> inputs;
     private ICombineStrategy strategy;
 
-    public Spread(Collection<String> inputsToSpread, ICombineStrategy strategy) {
-        this.inputsToSpread = inputsToSpread;
+    public Spread(Collection<String> inputs, ICombineStrategy strategy) {
+        this.inputs = inputs;
         this.strategy = strategy;
     }
 
-    public Collection<String> getInputsToSpread() { return inputsToSpread; }
+    public Spread() {}
+
+    public Collection<String> getInputs() { return inputs; }
     public ICombineStrategy getStrategy() { return strategy; }
+
 }

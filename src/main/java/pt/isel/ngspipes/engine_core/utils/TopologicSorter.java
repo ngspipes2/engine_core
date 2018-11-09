@@ -22,8 +22,12 @@ public class TopologicSorter {
             Job root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
-                addStepParents(graph, chainsToCpy, pipeline);
-                return graph;
+                if (roots.size() == 0) {
+                    addStepParents(graph, chainsToCpy, pipeline);
+                    return graph;
+                } else {
+                    continue;
+                }
             }
 
             for(Job job : chainsFrom.get(root.getId())){
@@ -51,15 +55,18 @@ public class TopologicSorter {
             Job root = roots.remove(0);
 
             if(!chainsFrom.containsKey(root.getId())) {
-                return orderedSteps;
+                if (roots.size() == 0) {
+                    return orderedSteps;
+                } else {
+                    continue;
+                }
             }
-
-            for(Job job : chainsFrom.get(root.getId())){
+            for (Job job : chainsFrom.get(root.getId())) {
                 String id = job.getId();
-                if(chainsTo.containsKey(id))
+                if (chainsTo.containsKey(id))
                     chainsTo.get(id).remove(root);
 
-                if(chainsTo.get(id).isEmpty()) {
+                if (chainsTo.get(id).isEmpty()) {
                     roots.add(0, job);
                     addSequentialChild(orderedSteps, job);
                 }
@@ -195,7 +202,7 @@ public class TopologicSorter {
 
     private static boolean isChainStep(String stepName, Collection<Input> chainInputs) {
         for (Input input : chainInputs) {
-            if(input.getOriginStep().equals(stepName))
+            if(input.getOriginStep() != null && input.getOriginStep().equals(stepName))
                 return true;
         }
         return false;
@@ -204,7 +211,7 @@ public class TopologicSorter {
     private static Collection<Input> getChainInputs(Job job) {
         Collection<Input> chainInputs = new LinkedList<>();
         for (Input input : job.getInputs())
-            if (!input.getOriginStep().equals(job.getId()))
+            if (input.getOriginStep() != null && !input.getOriginStep().equals(job.getId()))
                 chainInputs.add(input);
         return chainInputs;
     }

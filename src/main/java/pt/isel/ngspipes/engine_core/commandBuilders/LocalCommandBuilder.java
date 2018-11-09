@@ -8,6 +8,7 @@ public class LocalCommandBuilder extends CommandBuilder {
     @Override
     public String build(Pipeline pipeline, String stepId)
                         throws CommandBuilderException {
+        // TODO: include installation commands
         return buildCommand(pipeline, stepId, this::getChainFileValue);
     }
 

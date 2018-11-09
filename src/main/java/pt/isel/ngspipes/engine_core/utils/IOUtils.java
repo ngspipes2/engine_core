@@ -3,6 +3,8 @@ package pt.isel.ngspipes.engine_core.utils;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Objects;
 
 public class IOUtils {
@@ -20,6 +22,13 @@ public class IOUtils {
         destFile.mkdirs();
     }
 
+    public static void verifyFile(String path) throws IOException {
+        File file = new File(path);
+
+        if (!file.exists())
+            throw new IOException("File " + path + " not found");
+    }
+
     public static void copyDirectory(String source, String dest) throws IOException {
 
         Path sourcePath = Paths.get(source);
@@ -34,6 +43,21 @@ public class IOUtils {
             copyFile(source + fileName, dest + fileName);
         }
     }
+
+    public static List<String> getFileNamesByPattern(String directoryPath, String pattern) {
+        File dir = new File(directoryPath);
+        List<String> names = new LinkedList<>();
+        File [] files = dir.listFiles((dir1, name) -> name.matches(pattern));
+
+        if (files != null) {
+            for (File file : files)
+                names.add(file.getName());
+        }
+
+        return names;
+    }
+
+
 
     private static void copySimpleFile(String source, String dest) throws IOException {
         Path sourcePath = Paths.get(source);
@@ -59,12 +83,5 @@ public class IOUtils {
                     copySimpleFile(sourcePath + File.separatorChar + name, destPath + File.separatorChar + name);
                 }
             }
-    }
-
-    public static void verifyFile(String path) throws IOException {
-        File file = new File(path);
-
-        if (!file.exists())
-            throw new IOException("File " + path + " not found");
     }
 }

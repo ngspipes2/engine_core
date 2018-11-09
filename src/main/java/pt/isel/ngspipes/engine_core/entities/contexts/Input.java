@@ -1,21 +1,29 @@
 package pt.isel.ngspipes.engine_core.entities.contexts;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
 
 public class Input {
 
     private String name;
-    private String originStep;
-    private String chainOutput;
     private String type;
-    private String value;
-    private String prefix;
-    private String separator;
-    private String suffix;
-    private List<Input> subInputs;
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String originStep;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String chainOutput;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String value;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String prefix;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String separator;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String suffix;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private List<Input> subInputs;
     @JsonIgnore
     private Job originJob;
 
@@ -40,7 +48,8 @@ public class Input {
 
     public Input() {}
 
-    public String getOriginStep() { return originJob.getId(); }
+    public String getOriginStep() { return originStep; }
+    public Job getOriginJob() { return originJob; }
     public String getName() { return name; }
     public String getType() { return type; }
     public String getValue() { return value; }
@@ -50,4 +59,5 @@ public class Input {
     public String getSuffix() { return suffix; }
     public List<Input> getSubInputs() { return subInputs; }
 
+    public void setValue(String value) { this.value = value; }
 }

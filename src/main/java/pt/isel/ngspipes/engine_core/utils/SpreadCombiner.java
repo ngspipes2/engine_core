@@ -10,12 +10,13 @@ import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IOneT
 
 import java.util.Collection;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
 public class SpreadCombiner {
 
 
-    public static void getInputsCombination(ICombineStrategy strategy, Map<String, Collection<String>> inputsToSpread) throws EngineException {
+    public static void getInputsCombination(ICombineStrategy strategy, Map<String, List<String>> inputsToSpread) throws EngineException {
 
         IStrategy first = strategy.getFirstStrategy();
         IStrategy second = strategy.getSecondStrategy();
@@ -34,7 +35,7 @@ public class SpreadCombiner {
         }
     }
 
-    private static void combineInputs(Map<String, Collection<String>> inputsToSpread,
+    private static void combineInputs(Map<String, List<String>> inputsToSpread,
                                       ICombineStrategy strategy) throws EngineException {
         IInputStrategyDescriptor firstStrategy = (IInputStrategyDescriptor) strategy.getFirstStrategy();
         IInputStrategyDescriptor secondStrategy = (IInputStrategyDescriptor) strategy.getSecondStrategy();
@@ -45,14 +46,14 @@ public class SpreadCombiner {
         }
     }
 
-    private static void setOneToMany(String one, String many, Map<String, Collection<String>> inputsToSpread) {
+    private static void setOneToMany(String one, String many, Map<String, List<String>> inputsToSpread) {
         Collection<String> oneValues = inputsToSpread.get(one);
         Collection<String> manyValues = inputsToSpread.get(many);
         inputsToSpread.remove(one);
         inputsToSpread.remove(many);
 
-        Collection<String> oneCombinedValues = new LinkedList<>();
-        Collection<String> manyCombinedValues = new LinkedList<>();
+        List<String> oneCombinedValues = new LinkedList<>();
+        List<String> manyCombinedValues = new LinkedList<>();
 
         for (String oneVal : oneValues) {
             for (String manyVal : manyValues) {

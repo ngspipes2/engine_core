@@ -38,8 +38,8 @@ public class JobFactory {
     public static Pipeline create(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
                                   Arguments arguments, String workingDirectory) throws EngineException {
 
-        List<Job> jobs = getJobs(pipelineDescriptor, parameters, workingDirectory);
         PipelineEnvironment environment = getPipelineEnvironment(arguments, workingDirectory);
+        List<Job> jobs = getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory());
         Pipeline pipeline = new Pipeline(jobs, executionId, environment);
         setStepsResources(pipeline, pipelineDescriptor, parameters);
         setOutputs(pipeline::setOutputs, pipelineDescriptor, pipeline.getJobs());
@@ -154,7 +154,7 @@ public class JobFactory {
         String jobId = stepId;
         if (!subId.isEmpty())
             jobId = generateSubJobId(subId, stepId);
-        Environment environment = getStepEnvironment(jobId, workingDirectory);
+        Environment environment = getJobEnvironment(jobId, workingDirectory);
         Job job = new SimpleJob(jobId, environment, command, execCtx);
 
         ISpreadDescriptor spread = step.getSpread();
@@ -211,7 +211,7 @@ public class JobFactory {
             Job job = entry.getValue().getKey();
             String id = job.getId();
             IPipelineDescriptor pipelineDescriptor = pipelineDesc;
-            IStepDescriptor step = null;
+            IStepDescriptor step;
             if (job.getId().contains("_")) {
                 String stepId = job.getId();
                 id = id.substring(id.lastIndexOf("_") + 1);
@@ -413,7 +413,7 @@ public class JobFactory {
         List<Input> orderedInputs = orderInputsByNameLength(inputs);
         for (Input input : orderedInputs) {
             if (outName.contains(input.getName())) {
-                String outVal = outName.replace(input.getName(), input.getValue());
+                String outVal = outName.replace(input.getName(), input.getValue().toString());
                 value.append(outVal);
                 return;
             }
@@ -494,6 +494,7 @@ public class JobFactory {
         }
 
         Job originJob = getOriginJobByStepId(jobCmdMap, stepId);
+        assert originJob != null;
         Input inputContext = new Input(name, originJob, outName, param.getType(),
                                         inputValue.toString(), getFix(param.getPrefix()), getFix(param.getSeparator()),
                                         getFix(param.getSuffix()), new LinkedList<>());
@@ -519,7 +520,7 @@ public class JobFactory {
                                      IPipelineDescriptor pipeDesc, List<String> visitParams,
                                      List<IParameterDescriptor> subParams, List<Input> subInputs, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap) throws EngineException {
         Map.Entry<String, Map.Entry<String, String>> inVal;
-        String outName = "", stepId = "";
+        String outName = "", stepId;
         for (IParameterDescriptor subParam : subParams) {
             visitParams.add(subParam.getName());
             IInputDescriptor in = DescriptorsUtils.getInputByName(step.getInputs(), subParam.getName());
@@ -581,6 +582,7 @@ public class JobFactory {
             pipelineDescriptor = getPipelineDescriptor(pipelinesRepos, pipelineDesc, dependentStep, input.getStepId());
         }
 
+        assert pipelineDescriptor != null;
         IStepDescriptor stepDesc = DescriptorsUtils.getStepById(pipelineDescriptor, dependentStep);
         String outName = input.getOutputName();
         assert stepDesc != null;
@@ -662,7 +664,7 @@ public class JobFactory {
         return val;
     }
 
-    private static Environment getStepEnvironment(String id, String workingDirectory)
+    public static Environment getJobEnvironment(String id, String workingDirectory)
     {
         String stepWorkDir = workingDirectory + File.separatorChar + id;
         Environment environment = new Environment();
@@ -672,7 +674,7 @@ public class JobFactory {
         return environment;
     }
 
-    private static PipelineEnvironment getPipelineEnvironment(Arguments arguments, String workingDirectory) {
+    public static PipelineEnvironment getPipelineEnvironment(Arguments arguments, String workingDirectory) {
         PipelineEnvironment environment = new PipelineEnvironment();
         environment.setCpu(arguments.cpus);
         environment.setDisk(arguments.disk);
