@@ -2,9 +2,8 @@ package pt.isel.ngspipes.engine_core.utils;
 
 import pt.isel.ngspipes.engine_core.entities.ExecutionState;
 import pt.isel.ngspipes.engine_core.entities.StateEnum;
-import pt.isel.ngspipes.engine_core.entities.contexts.Job;
-import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
-import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
+import pt.isel.ngspipes.engine_core.entities.contexts.*;
+import pt.isel.ngspipes.engine_core.entities.contexts.strategy.ICombineStrategy;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.exception.InputValidationException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
@@ -17,10 +16,8 @@ import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
-import pt.isel.ngspipes.pipeline_descriptor.step.spread.ISpreadDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.ICombineStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IInputStrategyDescriptor;
-import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_repository.IPipelinesRepository;
 import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.IOutputDescriptor;
@@ -33,18 +30,11 @@ import java.util.*;
 
 public class ValidateUtils {
 
-    public static void validateSteps(IPipelineDescriptor pipelineDescriptor,
-                                     Map<String, Object> parameters) throws EngineException {
+    public static void validateJobs(List<Job> jobs) throws EngineException {
 
-        for (IStepDescriptor step : pipelineDescriptor.getSteps()) {
-            if (step.getSpread() != null)
-                validateSpread(step.getId(), step.getInputs(), step.getSpread());
-
-            if (!(step.getExec() instanceof ICommandExecDescriptor)) {
-                validatePipelineStep(step, pipelineDescriptor, parameters);
-            } else {
-                validateCommandStep(step, pipelineDescriptor, parameters);
-            }
+        for (Job job : jobs) {
+            if (job.getSpread() != null)
+                validateSpread(job, job.getSpread());
         }
     }
 
@@ -96,6 +86,14 @@ public class ValidateUtils {
                     + " from pipeline: " + executionId);
     }
 
+    static void validateInput(IStepDescriptor step, ICommandDescriptor commandDescriptor,
+                              IParameterDescriptor parameterDescriptor, IInputDescriptor input,
+                              IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
+        validateMandatory(step, commandDescriptor, parameterDescriptor, input, parameters);
+        if (input != null)
+            validateInputType(step, parameterDescriptor, input, pipelineDescriptor, commandDescriptor, parameters);
+    }
+
     static void validateInputValues(Map<String, List<String>> inputsValues, String first, String second) throws EngineException {
         int sizeFirst = inputsValues.get(first).size();
         int sizeSecond = inputsValues.get(second).size();
@@ -104,81 +102,54 @@ public class ValidateUtils {
     }
 
 
-    private static void validateSpread(String stepId, Collection<IInputDescriptor> inputs, ISpreadDescriptor spread) throws EngineException {
-        validateSpreadInputsExistence(stepId, spread.getInputsToSpread(), inputs);
-        validateSpreadStrategyInputsExistence(stepId, spread);
+    private static void validateSpread(Job job, Spread spread) throws EngineException {
+        validateSpreadInputsExistence(job, spread.getInputs());
+        validateSpreadStrategyInputsExistence(job, spread);
     }
 
-    private static void validateSpreadStrategyInputsExistence(String stepId, ISpreadDescriptor spread) throws EngineException {
+    private static void validateSpreadStrategyInputsExistence(Job job, Spread spread) throws EngineException {
         if (spread.getStrategy() != null) {
-            if (spread.getInputsToSpread().size() < 2)
+            Collection<String> inputs = spread.getInputs();
+            if (inputs.size() < 2)
                 throw new EngineException("Inputs to spread must be at least 2.");
-            int count = validateStrategyInput(stepId, spread.getInputsToSpread(), spread.getStrategy());
-            if (spread.getInputsToSpread().size() < count)
+            int count = validateStrategyInput(job, inputs, spread.getStrategy());
+            if (inputs.size() < count)
                 throw new EngineException("Inputs to spread must be " + count + ".");
         }
     }
 
-    private static int validateStrategyInput(String stepId, Collection<String> inputsToSpread,
-                                             IStrategyDescriptor strategy) throws EngineException {
+    private static int validateStrategyInput(Job job, Collection<String> inputsToSpread,
+                                             ICombineStrategy strategy) throws EngineException {
         if (strategy == null)
-            throw new EngineException("Spread malformed on step" + stepId + ".");
+            throw new EngineException("Spread malformed on step" + job + ".");
 
         if (strategy instanceof ICombineStrategyDescriptor) {
             ICombineStrategyDescriptor combined = (ICombineStrategyDescriptor) strategy;
-            int count = validateStrategyInput(stepId, inputsToSpread, combined.getFirstStrategy());
-            return count + validateStrategyInput(stepId, inputsToSpread, combined.getSecondStrategy());
+            int count = validateStrategyInput(job, inputsToSpread, (ICombineStrategy) combined.getFirstStrategy());
+            return count + validateStrategyInput(job, inputsToSpread, (ICombineStrategy) combined.getSecondStrategy());
         } else if (strategy instanceof IInputStrategyDescriptor) {
-            validateInputWithinToSpread(stepId, inputsToSpread, (IInputStrategyDescriptor) strategy);
+            validateInputWithinToSpread(job.getId(), inputsToSpread, (IInputStrategyDescriptor) strategy);
             return 1;
         }
 
         return 0;
     }
 
-    private static void validateInputWithinToSpread(String stepId, Collection<String> inputsToSpread,
+    private static void validateInputWithinToSpread(String jobId, Collection<String> inputsToSpread,
                                                     IInputStrategyDescriptor strategy) throws EngineException {
         String inputName = strategy.getInputName();
         if (!inputsToSpread.contains(inputName))
-            throw new EngineException("Error validating spread on step:" + stepId + ".Strategy input " + inputName
+            throw new EngineException("Error validating spread on step:" + jobId + ".Strategy input " + inputName
                     + " must be specified on spread inputs");
     }
 
-    private static void validateSpreadInputsExistence(String stepId, Collection<String> inputsToSpread,
-                                                      Collection<IInputDescriptor> inputs) throws EngineException {
+    private static void validateSpreadInputsExistence(Job job, Collection<String> inputsToSpread) throws EngineException {
         for (String inputName : inputsToSpread) {
-            IInputDescriptor input = DescriptorsUtils.getInputByName(inputs, inputName);
+            Input input = job.getInputById(inputName);
             if (input == null)
                 throw new EngineException("Using " + inputName + " as input to spread and " +
-                        "isn't defined as input of step " + stepId + ".");
+                        "isn't defined as input of step " + job.getId() + ".");
         }
-    }
-
-    private static void validatePipelineStep(IStepDescriptor step, IPipelineDescriptor pipelineDescriptor,
-                                             Map<String, Object> parameters) throws EngineException {
-        IPipelineDescriptor pipelineDesc = DescriptorsUtils.getPipelineDescriptor(pipelineDescriptor, parameters, step);
-        validateSteps(pipelineDesc, parameters);
-    }
-
-    private static void validateCommandStep(IStepDescriptor stepCtx, IPipelineDescriptor pipelineDesc,
-                                            Map<String, Object> parameters) throws EngineException {
-        IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
-        assert step != null;
-        ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, parameters);
-
-        for (IParameterDescriptor parameterDescriptor : commandDescriptor.getParameters()) {
-            IInputDescriptor input = DescriptorsUtils.getInputByName(step.getInputs(), parameterDescriptor.getName());
-
-            validateInput(step, commandDescriptor, parameterDescriptor, input, pipelineDesc, parameters);
-        }
-    }
-
-    private static void validateInput(IStepDescriptor step,  ICommandDescriptor commandDescriptor,
-                                      IParameterDescriptor parameterDescriptor, IInputDescriptor input,
-                                      IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
-        validateMandatory(step, commandDescriptor, parameterDescriptor, input, parameters);
-        if (input != null)
-            validateInputType(step, parameterDescriptor, input, pipelineDescriptor, commandDescriptor, parameters);
     }
 
     private static void validateMandatory(IStepDescriptor step, ICommandDescriptor commandDescriptor,
@@ -423,7 +394,7 @@ public class ValidateUtils {
         }
     }
 
-    public static boolean isOutputDependentInputSpecified(String value, Collection<IInputDescriptor> inputs) {
+    private static boolean isOutputDependentInputSpecified(String value, Collection<IInputDescriptor> inputs) {
         boolean contains = false;
         for (IInputDescriptor input : inputs) {
             if (value.contains(input.getInputName())) {
@@ -433,18 +404,4 @@ public class ValidateUtils {
         return contains;
     }
 
-    public static boolean isOutputDependentInputTypeNoPrimitive(String value, IStepDescriptor step, IPipelineDescriptor pipelineDesc,
-                                                                Map<String, Object> params) throws EngineException {
-        boolean nonPrimitive = false;
-        for (IInputDescriptor input : step.getInputs()) {
-            ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommandDescriptor(step, pipelineDesc, params);
-            IParameterDescriptor param = DescriptorsUtils.getParameterById(commandDescriptor.getParameters(), input.getInputName());
-            assert param != null;
-            if (value.contains(input.getInputName()) && (param.getType().equalsIgnoreCase("file")
-                || param.getType().equalsIgnoreCase("directory"))) {
-                nonPrimitive = true;
-            }
-        }
-        return nonPrimitive;
-    }
 }

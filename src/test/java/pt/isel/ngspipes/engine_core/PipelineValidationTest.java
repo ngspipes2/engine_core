@@ -34,7 +34,7 @@ public class PipelineValidationTest {
 //            Pipeline pipeline = JobFactory.create("abc", pipelineDescriptor, parameters, arguments, "");
 //            ValidateUtils.validateRepositories(pipelineDescriptor.getRepositories());
 //            ValidateUtils.validateNonCyclePipeline(pipelineDescriptor, parameters);
-//            ValidateUtils.validateSteps(pipelineDescriptor, parameters);
+//            ValidateUtils.validateJobs(pipelineDescriptor, parameters);
 //            ValidateUtils.validateOutputs(pipelineDescriptor, parameters);
 //
 //        } catch (ParserException | IOException | EngineException e) {
