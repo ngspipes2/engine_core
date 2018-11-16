@@ -1,20 +1,29 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.SftpException;
-import pt.isel.ngspipes.engine_core.entities.*;
+import pt.isel.ngspipes.engine_core.entities.Environment;
+import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
+import pt.isel.ngspipes.engine_core.entities.ExecutionState;
+import pt.isel.ngspipes.engine_core.entities.StateEnum;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
+import pt.isel.ngspipes.engine_core.tasks.Task;
+import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.*;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EngineMesos extends Engine {
 
@@ -35,7 +44,8 @@ public class EngineMesos extends Engine {
     private static final String TAG = "MesosEngine";
 
     private static final String CHRONOS_DEPENDENCY = "dependency";
-    private static final String CHRONOS_JOB = "iso8601";
+    private static final String CHRONOS_ISO = "iso8601";
+    private static final String CHRONOS_JOB = "job";
 
 //    private final String chronosEndpoint = "http://192.92.149.146:4400/scheduler/";
     private final String chronosEndpoint = "http://10.0.2.9:4400/scheduler/";
@@ -48,24 +58,26 @@ public class EngineMesos extends Engine {
             File.separatorChar + "Engine";
 
 
+    private final Map<String, Collection<Job>> TASKS_BY_EXEC_ID = new HashMap<>();
+
     private final ConsoleReporter reporter = new ConsoleReporter();
 
 
     EngineMesos(String workingDirectory) {
-        super(workingDirectory);
+        super(workingDirectory, TAG);
     }
 
-    public EngineMesos() { super(WORK_DIRECTORY); }
+    public EngineMesos() { super(WORK_DIRECTORY, TAG); }
+
 
     @Override
-    protected void stage(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException {
-        copyPipelineInputs(pipeline);
-        schedulePipeline(pipeline);
-        pipeline.getState().setState(StateEnum.SCHEDULE);
+    public void run(Pipeline pipeline, Collection<ExecutionNode> executionGraph) {
+        TASKS_BY_EXEC_ID.put(pipeline.getName(), pipeline.getJobs());
+        scheduleParentsTasks(executionGraph, pipeline.getName());
     }
 
     @Override
-    List<String> getOutputValuessFromJob(String chainOutput, Job originJob) {
+    List<String> getOutputValuesFromJob(String chainOutput, Job originJob) {
         throw new NotImplementedException();
     }
 
@@ -76,7 +88,51 @@ public class EngineMesos extends Engine {
 
     @Override
     public boolean stop(String executionId) throws EngineException {
-        return false;
+        AtomicBoolean stopped = new AtomicBoolean(true);
+
+        for (Job job : TASKS_BY_EXEC_ID.get(executionId)) {
+            try {
+                String url = chronosEndpoint + CHRONOS_JOB + "/" + job.getId();
+                Task<Void> delete = TaskFactory.createAndExecuteTask(() -> {
+                    try {
+                        HttpUtils.delete(url);
+                    } catch (IOException e) {
+                        stopped.set(false);
+                    }
+                });
+                boolean wait = delete.cancelledEvent.await(200);
+                stopped.set(stopped.get() && wait);
+            } catch (InterruptedException e) {
+                ExecutionState state = new ExecutionState();
+                state.setState(StateEnum.STOPPED);
+            }
+        }
+        return stopped.get();
+    }
+
+    @Override
+    public void copyPipelineInputs(Pipeline pipeline) throws EngineException {
+        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
+                + pipeline.getName() + " inputs.");
+
+        updateEnvironment(pipeline.getEnvironment());
+        ChannelSftp sftp = null;
+        try {
+            SSHConfig config = getSshConfig();
+            sftp = SSHUtils.getChannelSftp(config);
+            SSHUtils.createIfNotExist(pipeline.getEnvironment().getWorkDirectory(), sftp);
+        } catch (JSchException | SftpException  e) {
+            throw new EngineException("Error connecting server " + SSH_HOST);
+        } finally {
+            if(sftp != null) {
+                sftp.disconnect();
+            }
+        }
+
+        for (Job step : pipeline.getJobs()) {
+            updateEnvironment(step.getEnvironment());
+            uploadInputs(step, step.getInputs());
+        }
     }
 
     public static Collection<String> getPipelineOutputs(String pipelineName) throws JSchException {
@@ -109,17 +165,6 @@ public class EngineMesos extends Engine {
         return new SSHConfig(SSH_USER, SSH_PASSWORD, SSH_HOST, SSH_PORT);
     }
 
-
-    private void schedulePipeline(Pipeline pipeline) {
-        logger.trace(TAG + ":: Scheduling pipeline " + pipeline.getName() + " " + pipeline.getName());
-        String executionId = pipeline.getName();
-        Collection<ExecutionNode> executionGraph = pipeline.getGraph();
-        run(executionId, executionGraph);
-    }
-
-    private void run(String executionId, Collection<ExecutionNode> executionGraph) {
-        scheduleParentsTasks(executionGraph, executionId);
-    }
 
 
     private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId) {
@@ -176,9 +221,9 @@ public class EngineMesos extends Engine {
                     + " from pipeline: " + pipeline.getName());
             IOUtils.createFolder(stepCtx.getEnvironment().getOutputsDirectory());
             String chronosJob = getChronosJob(executeCmd, stepCtx, pipeline.getName());
-            HttpUtils.scheduleChronosJob(chronosEndpoint + CHRONOS_JOB, chronosJob);
+            HttpUtils.post(chronosEndpoint + CHRONOS_ISO, chronosJob);
             validateOutputs(stepCtx);
-        } catch (EngineException e) {
+        } catch (EngineException | IOException e) {
             logger.error("Executing step: " + stepCtx.getId()
                     + " from pipeline: " + pipeline.getName(), e);
             throw new EngineException("Error executing step: " + stepCtx.getId()
@@ -241,6 +286,27 @@ public class EngineMesos extends Engine {
 //        }
     }
 
+    public static boolean isJobSuccess(String url, String jobName) {
+        url = url + "jobs/search?name=" + jobName;
+        try {
+            String content = HttpUtils.get(url);
+            System.out.println("Getting status for: " + jobName);
+            ChronosJobStatusDto chronosJobStatusDto = getChronosJobStatusDto(content);
+            return chronosJobStatusDto.successCount > 0;
+        } catch (IOException e) {
+            System.out.println(e.getMessage());
+        }
+        return false;
+    }
+
+    private static ChronosJobStatusDto getChronosJobStatusDto(String content) throws IOException {
+        return getObjectMapper(new JsonFactory()).readValue(content, ChronosJobStatusDto[].class)[0];
+    }
+
+    private static ObjectMapper getObjectMapper(JsonFactory factory) {
+        return new ObjectMapper(factory);
+    }
+
     private void copyChainInputs(SimpleJob stepCtx, Pipeline pipeline) throws EngineException {
 
         String destDir = stepCtx.getEnvironment().getWorkDirectory() + File.separatorChar;
@@ -273,30 +339,6 @@ public class EngineMesos extends Engine {
 
     private void updatePipelineState(String executionId, ExecutionState state) {
         pipelines.get(executionId).setState(state);
-    }
-
-    private void copyPipelineInputs(Pipeline pipeline) throws EngineException {
-        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
-                + pipeline.getName() + " inputs.");
-
-        updateEnvironment(pipeline.getEnvironment());
-        ChannelSftp sftp = null;
-        try {
-            SSHConfig config = getSshConfig();
-            sftp = SSHUtils.getChannelSftp(config);
-            SSHUtils.createIfNotExist(pipeline.getEnvironment().getWorkDirectory(), sftp);
-        } catch (JSchException | SftpException  e) {
-            throw new EngineException("Error connecting server " + SSH_HOST);
-        } finally {
-            if(sftp != null) {
-                sftp.disconnect();
-            }
-        }
-
-        for (Job step : pipeline.getJobs()) {
-            updateEnvironment(step.getEnvironment());
-            uploadInputs(step, step.getInputs());
-        }
     }
 
     private void updateEnvironment(Environment environment) {

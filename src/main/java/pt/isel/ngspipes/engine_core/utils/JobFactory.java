@@ -445,6 +445,7 @@ public class JobFactory {
                                  String name, Job job, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap) throws EngineException {
         visitParams.add(name);
         IInputDescriptor input = DescriptorsUtils.getInputByName(step.getInputs(), name);
+        ValidateUtils.validateInput(step, jobCmdMap.get(step.getId()).getValue(), param, input, pipeDesc, params);
         StringBuilder inputValue = new StringBuilder();
         List<IParameterDescriptor> subParams = (List<IParameterDescriptor>) param.getSubParameters();
         if (input == null) {
@@ -514,11 +515,10 @@ public class JobFactory {
         return null;
     }
 
-    private static void addSubInputs(Map<String, Object> params, IStepDescriptor step,
-                                     Map<String, IToolsRepository> toolsRepos,
-                                     Map<String, IPipelinesRepository> pipeRepos,
-                                     IPipelineDescriptor pipeDesc, List<String> visitParams,
-                                     List<IParameterDescriptor> subParams, List<Input> subInputs, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap) throws EngineException {
+    private static void addSubInputs(Map<String, Object> params, IStepDescriptor step, Map<String, IToolsRepository> toolsRepos,
+                                     Map<String, IPipelinesRepository> pipeRepos, IPipelineDescriptor pipeDesc,
+                                     List<String> visitParams, List<IParameterDescriptor> subParams,
+                                     List<Input> subInputs, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap) throws EngineException {
         Map.Entry<String, Map.Entry<String, String>> inVal;
         String outName = "", stepId;
         for (IParameterDescriptor subParam : subParams) {

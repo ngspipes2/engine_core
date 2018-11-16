@@ -23,6 +23,9 @@ public abstract class Job {
     private List<Output> outputs;
 
     @JsonIgnore
+    boolean inconclusive;
+
+    @JsonIgnore
     private Environment environment;
 
     @JsonIgnore
@@ -35,29 +38,32 @@ public abstract class Job {
     private Map<String, Input> inputsById;
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    Spread spread;
+    private Spread spread;
 
     public Job(String id, Environment environment) {
         this.id = id;
         this.environment = environment;
         this.state = new ExecutionState();
         this.parents = new LinkedList<>();
+        this.inconclusive = false;
     }
 
     public Job() {}
 
+    public void setId(String id) { this.id = id; }
     public String getId() { return id; }
+
+    public void setEnvironment(Environment environment) { this.environment = environment; }
     public Environment getEnvironment() { return environment; }
+
     public ExecutionState getState() { return state; }
-    public Collection<String> getParents() { return parents;}
-    public Input getInputById(String id) { return inputsById.get(id); }
-    public List<Input> getInputs() { return inputs; }
-    public Output getOutputById(String id) { return outputsById.get(id); }
-    public List<Output> getOutputs() { return outputs; }
+    public void setState(ExecutionState state) { this.state = state; }
 
     public Spread getSpread() { return spread; }
     public void setSpread(Spread spread) { this.spread = spread; }
 
+    public Output getOutputById(String id) { return outputsById.get(id); }
+    public List<Output> getOutputs() { return outputs; }
     public void setOutputs(List<Output> outputs) {
         this.outputs = outputs;
         this.outputsById = new HashMap<>();
@@ -65,6 +71,8 @@ public abstract class Job {
             outputsById.put(out.getName(), out);
     }
 
+    public Input getInputById(String id) { return inputsById.get(id); }
+    public List<Input> getInputs() { return inputs; }
     public void setInputs(List<Input> inputs)  {
         this.inputs = inputs;
         this.inputsById = new HashMap<>();
@@ -72,14 +80,15 @@ public abstract class Job {
             inputsById.put(in.getName(), in);
     }
 
+    public Collection<String> getParents() { return parents;}
     public void addParent(Job parent) {
         if (!parents.contains(parent))
             parents.add(parent.id);
     }
-
-    public void setId(String id) { this.id = id; }
-    public void setEnvironment(Environment environment) { this.environment = environment; }
     public void setParents(Collection<String> parents) { this.parents = parents; }
+
+    public boolean isInconclusive() { return inconclusive; }
+    public void setInconclusive(boolean inconclusive) { this.inconclusive = inconclusive; }
 
     @Override
     public boolean equals(Object obj) {

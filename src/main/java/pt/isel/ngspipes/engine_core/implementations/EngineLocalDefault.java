@@ -1,6 +1,5 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import pt.isel.ngspipes.engine_core.entities.ExecutionBlock;
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_core.entities.ExecutionState;
 import pt.isel.ngspipes.engine_core.entities.StateEnum;
@@ -13,6 +12,7 @@ import pt.isel.ngspipes.engine_core.tasks.Task;
 import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.IOUtils;
 import pt.isel.ngspipes.engine_core.utils.ProcessRunner;
+import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
@@ -32,20 +32,33 @@ public class EngineLocalDefault extends Engine {
 
 
     public EngineLocalDefault(String workingDirectory) {
-        super(workingDirectory);
+        super(workingDirectory, TAG);
     }
 
-    public EngineLocalDefault() { super(WORK_DIRECTORY); }
+    public EngineLocalDefault() { super(WORK_DIRECTORY, TAG); }
 
     @Override
-    protected void stage(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException {
-        copyPipelineInputs(pipeline);
-        schedulePipeline(pipeline, executionBlocks);
-        pipeline.getState().setState(StateEnum.SCHEDULE);
+    public void run(Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException {
+        TASKS_BY_EXEC_ID.put(pipeline.getName(), new HashMap<>());
+        Map<Job, BasicTask<Void>> taskMap = getTasks(graph, pipeline, new HashMap<>());
+        pipeline.getState().setState(StateEnum.RUNNING);
+        scheduleFinishPipelineTask(pipeline, taskMap);
+        scheduleChildTasks(pipeline, taskMap);
+        scheduleParentsTasks(graph, pipeline.getName(), taskMap);
     }
 
     @Override
-    List<String> getOutputValuessFromJob(String chainOutput, Job originJob) {
+    public void copyPipelineInputs(Pipeline pipeline) throws EngineException {
+        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
+                + pipeline.getName() + " inputs.");
+
+        for (Job job : pipeline.getJobs()) {
+            copyInputs(job, job.getInputs());
+        }
+    }
+
+    @Override
+    List<String> getOutputValuesFromJob(String chainOutput, Job originJob) {
         List<String> outputValues = new LinkedList<>();
         originJob.getOutputs().forEach((out) -> {
             if (out.getName().equalsIgnoreCase(chainOutput)) {
@@ -79,30 +92,8 @@ public class EngineLocalDefault extends Engine {
     }
 
 
-
-    private void schedulePipeline(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException {
-        logger.trace(TAG + ":: Scheduling pipeline " + pipeline.getName() + " " + pipeline.getName());
-        String executionId = pipeline.getName();
-        TASKS_BY_EXEC_ID.put(executionId, new HashMap<>());
-        run(pipeline, executionBlocks);
-    }
-
     private void updatePipelineState(String executionId, ExecutionState state) {
         pipelines.get(executionId).setState(state);
-    }
-
-    private void run(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException {
-        for (ExecutionBlock block : executionBlocks) {
-            addSpreadNodes(pipeline, block);
-            Map<Job, BasicTask<Void>> taskMap = getTasks(block.getJobsToExecute(), pipeline, new HashMap<>());
-            TASKS_BY_EXEC_ID.put(pipeline.getName(), taskMap);
-            pipeline.getState().setState(StateEnum.RUNNING);
-            scheduleFinishPipelineTask(pipeline, taskMap);
-            scheduleChildTasks(pipeline, taskMap);
-            scheduleParentsTasks(block.getJobsToExecute(), pipeline.getName(), taskMap);
-
-
-        }
     }
 
     private void scheduleFinishPipelineTask(Pipeline pipeline, Map<Job, BasicTask<Void>> taskMap) {
@@ -147,9 +138,9 @@ public class EngineLocalDefault extends Engine {
             Job job = node.getJob();
             BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
                 try {
-                    runTask(job, pipeline);
+                    runTask(job, pipeline, executionGraph);
                 } catch (EngineException e) {
-                    updateState(pipeline, job, e);
+                    updateState(pipeline, job, e, StateEnum.FAILED);
                 }
             });
             tasks.put(job, task);
@@ -158,15 +149,6 @@ public class EngineLocalDefault extends Engine {
         }
 
         return tasks;
-    }
-
-    private void copyPipelineInputs(Pipeline pipeline) throws EngineException {
-        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
-                + pipeline.getName() + " inputs.");
-
-        for (Job job : pipeline.getJobs()) {
-            copyInputs(job, job.getInputs());
-        }
     }
 
     private void copyInputs(Job job, List<Input> inputs) throws EngineException {
@@ -219,13 +201,14 @@ public class EngineLocalDefault extends Engine {
         }
     }
 
-    private void updateState(Pipeline pipeline, Job job, EngineException e) {
-        ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
-        job.getState().setState(state.getState());
-        pipeline.setState(state);
+    private void updateState(Pipeline pipeline, Job job, EngineException e, StateEnum state) {
+        ExecutionState newState = new ExecutionState(state, e);
+        job.getState().setState(newState.getState());
+        if (e != null)
+            pipeline.setState(newState);
     }
 
-    private void runTask(Job job, Pipeline pipeline) throws EngineException {
+    private void runTask(Job job, Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException {
         ValidateUtils.validatePipelineState(pipeline);
         ValidateUtils.validateResources(job, pipeline);
         job.getState().setState(StateEnum.RUNNING);
@@ -236,9 +219,18 @@ public class EngineLocalDefault extends Engine {
 //            return;
         }
 
-        SimpleJob spreadJob = (SimpleJob) job;
-        execute(pipeline, spreadJob);
-        job.getState().setState(StateEnum.SUCCESS);
+        SimpleJob simpleJob = (SimpleJob) job;
+        if (simpleJob.getSpread() != null) {
+            expandSpreadJob(pipeline, simpleJob, graph);
+            run(pipeline, graph);
+        } else {
+            execute(pipeline, simpleJob);
+        }
+        updateState(pipeline, job, null, StateEnum.SUCCESS);
+        if (job.isInconclusive()) {
+            Collection<ExecutionNode> childGraph = TopologicSorter.parallelSort(pipeline, job);
+            run(pipeline, childGraph);
+        }
     }
 
     private void execute(Pipeline pipeline, SimpleJob stepCtx) throws EngineException {
@@ -246,20 +238,50 @@ public class EngineLocalDefault extends Engine {
         run(stepCtx, pipeline);
     }
 
-    private void run(SimpleJob stepCtx, Pipeline pipeline) throws EngineException {
-        String executeCmd = getExecutionCommand(stepCtx, pipeline);
+    private void run(SimpleJob job, Pipeline pipeline) throws EngineException {
+        String executeCmd = getExecutionCommand(job, pipeline);
         try {
-            reporter.reportInfo("Executing step: " + stepCtx.getId()
+            reporter.reportInfo("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName());
-            IOUtils.createFolder(stepCtx.getEnvironment().getOutputsDirectory());
-            ProcessRunner.run(executeCmd, stepCtx.getEnvironment().getWorkDirectory(), reporter);
-            validateOutputs(stepCtx);
+            IOUtils.createFolder(job.getEnvironment().getOutputsDirectory());
+            ProcessRunner.run(executeCmd, job.getEnvironment().getWorkDirectory(), reporter);
+            validateOutputs(job);
         } catch (EngineException e) {
-            logger.error("Executing step: " + stepCtx.getId()
+            logger.error("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
-            throw new EngineException("Error executing step: " + stepCtx.getId()
+            updateState(pipeline, job, e, StateEnum.SUCCESS);
+            throw new EngineException("Error executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
         }
+    }
+
+
+    private void expandSpreadJob(Pipeline pipeline, SimpleJob job, Collection<ExecutionNode> graph) throws EngineException {
+        removeBaseSpreadJobFromGraph(job, graph);
+
+        List<Job> chainsFrom = getChainsFrom(pipeline.getJobs(), job);
+        List<Job> spreadJobs = new LinkedList<>();
+        addSpreadNodes(job, spreadJobs, pipeline);
+        for (int idx = 0; idx < spreadJobs.size(); idx++) {
+            Job spreadJob = spreadJobs.get(idx);
+            List<ExecutionNode> childs = new LinkedList<>();
+            ExecutionNode node = new ExecutionNode(spreadJob, childs);
+            addSpreadJobChilds(pipeline, job, chainsFrom, childs);
+            graph.add(node);
+        }
+
+    }
+
+    private void removeBaseSpreadJobFromGraph(SimpleJob job, Collection<ExecutionNode> graph) throws EngineException {
+        List<ExecutionNode> toDelete = new LinkedList<>();
+        graph.forEach((node) -> {
+            if (node.getJob().getId().equalsIgnoreCase(job.getId())) {
+                toDelete.add(node);
+            }
+        });
+        if (!toDelete.isEmpty())
+            throw new EngineException("Error running spread step " + job.getId());
+        graph.removeAll(toDelete);
     }
 
     private void validateOutputs(SimpleJob stepCtx) throws EngineException {
@@ -293,22 +315,32 @@ public class EngineLocalDefault extends Engine {
 
         for (Input inputCtx : stepCtx.getInputs()) {
             if (!inputCtx.getOriginStep().equals(stepCtx.getId())) {
-                Job chainStep = pipeline.getJobById(inputCtx.getOriginStep());
-                String outDir = chainStep.getEnvironment().getOutputsDirectory() + File.separatorChar;
-                Output outCtx = chainStep.getOutputById(inputCtx.getChainOutput());
+                Job chainJob = pipeline.getJobById(inputCtx.getOriginStep());
+                String outDir = chainJob.getEnvironment().getOutputsDirectory() + File.separatorChar;
+                Output outCtx = chainJob.getOutputById(inputCtx.getChainOutput());
                 List<String> usedBy = outCtx.getUsedBy();
 
-                if (usedBy != null) {
-                    for (String dependet : usedBy) {
-                        Output outputCtx = chainStep.getOutputById(dependet);
-                        String value = outputCtx.getValue().toString();
-                        copyChainInput(outDir, destDir, outputCtx, value);
+                if (chainJob.getSpread() != null && stepCtx.getSpread() == null) { //JOIN CASE
+                    for (String value : getOutputValuesFromMultipleJobs(outCtx.getName(), chainJob)) {
+                        copyChainInput(outDir, destDir, outCtx, value);
                     }
-                } else {
-                    String value = outCtx.getValue().toString();
-                    copyChainInput(outDir, destDir, outCtx, value);
+                } else { // OTHER CASES
+                    copyFromSingleJob(destDir, chainJob, outDir, outCtx, usedBy);
                 }
             }
+        }
+    }
+
+    private void copyFromSingleJob(String destDir, Job chainJob, String outDir, Output outCtx, List<String> usedBy) throws EngineException {
+        if (usedBy != null) {
+            for (String dependet : usedBy) {
+                Output outputCtx = chainJob.getOutputById(dependet);
+                String value = outputCtx.getValue().toString();
+                copyChainInput(outDir, destDir, outputCtx, value);
+            }
+        } else {
+            String value = outCtx.getValue().toString();
+            copyChainInput(outDir, destDir, outCtx, value);
         }
     }
 

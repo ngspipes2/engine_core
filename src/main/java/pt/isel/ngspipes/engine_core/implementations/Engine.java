@@ -25,10 +25,12 @@ public abstract class Engine implements IEngine {
 
     Logger logger;
     String workingDirectory;
+    final String name;
     final Map<String, Pipeline> pipelines = new HashMap<>();
 
-    Engine(String workingDirectory) {
+    Engine(String workingDirectory, String name) {
         this.workingDirectory = workingDirectory;
+        this.name = name;
         logger = LogManager.getLogger(Engine.class.getName());
     }
 
@@ -36,8 +38,8 @@ public abstract class Engine implements IEngine {
     public Pipeline execute(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
                             Arguments arguments) throws EngineException {
         String id = generateExecutionId(pipelineDescriptor.getName());
-//        validate(pipelineDescriptor, parameters);
-        Pipeline pipeline = createPipelineContext(pipelineDescriptor, parameters, arguments, id);
+        validate(pipelineDescriptor, parameters);
+        Pipeline pipeline = createPipeline(pipelineDescriptor, parameters, arguments, id);
         return internalExecute(arguments.parallel, pipeline);
     }
 
@@ -56,29 +58,88 @@ public abstract class Engine implements IEngine {
     }
 
 
-    protected abstract void stage(Pipeline pipeline, List<ExecutionBlock> executionBlocks) throws EngineException;
-    abstract List<String> getOutputValuessFromJob(String chainOutput, Job originJob);
+    protected abstract void run(Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException;
+    protected abstract void copyPipelineInputs(Pipeline pipeline) throws EngineException;
+    abstract List<String> getOutputValuesFromJob(String chainOutput, Job originJob);
     abstract List<String> getOutputValuesFromMultipleJobs(String chainOutput, Job originJob);
 
-    protected void addSpreadNodes(Pipeline pipeline, ExecutionBlock block) throws EngineException {
 
-        List<ExecutionNode> newSpreadNodes = new LinkedList<>();
-        List<ExecutionNode> toDeleteSpreadFromExecBlock = new LinkedList<>();
-        List<ExecutionNode> jobsToExecute = block.getJobsToExecute();
-        List<Job> jobs = new LinkedList<>();
-        for (ExecutionNode node : jobsToExecute) {
-            toDeleteSpreadFromExecBlock.add(node);
-            Job job = node.getJob();
-            if(job.getSpread() != null) {
-                addSpreadNodes(node, newSpreadNodes, new LinkedList<>(), jobs, pipeline, this::getMiddleInputValues);
+    void addSpreadNodes(Job job, List<Job> jobs, Pipeline pipeline) throws EngineException {
+        Spread spread = job.getSpread();
+        BiFunction<Input, Pipeline, List<String>> values;
+
+        if (isSpreadChain(job, pipeline)) {
+            values = this::getMiddleInputValues;
+        } else {
+            values = this::getInitInputValues;
+        }
+
+        Map<String, List<String>> valuesOfInputsToSpread = getInputValuesToSpread(job, pipeline, values);
+        if (spread.getStrategy() != null)
+            SpreadCombiner.getInputsCombination(spread.getStrategy(), valuesOfInputsToSpread);
+
+        int idx = 0;
+        int len = getInputValuesLength(valuesOfInputsToSpread);
+
+        while (idx < len) {
+            Job jobToSpread = getSpreadJob(job, valuesOfInputsToSpread, idx, pipeline);
+            jobToSpread.setParents(job.getParents());
+            jobs.add(jobToSpread);
+            idx++;
+        }
+    }
+
+    void addSpreadJobChilds(Pipeline pipeline, Job job, List<Job> chainsFrom, List<ExecutionNode> childs) {
+        for (Job chainJob : chainsFrom) {
+            if (chainJob.getSpread() != null) {
+                addSpreadChild(pipeline, job, childs, chainJob);
             } else {
-                updateJoinJobChainInputValues(job);
+                chainJob.setInconclusive(!chainJob.isInconclusive());
+            }
+        }
+    }
+
+    List<Job> getChainsFrom(List<Job> jobs, Job fromJob) {
+        List<Job> chainsFrom = new LinkedList<>();
+
+        for (Job currJob : jobs) {
+            if (currJob.getParents().contains(fromJob.getId())) {
+                chainsFrom.add(currJob);
             }
         }
 
-        jobsToExecute.removeAll(toDeleteSpreadFromExecBlock);
-        jobsToExecute.addAll(newSpreadNodes);
-        block.getJobs().addAll(jobs);
+        return chainsFrom;
+    }
+
+
+    private void addSpreadChild(Pipeline pipeline, Job job, List<ExecutionNode> childs, Job chainJob) {
+        Collection<String> inputs = chainJob.getSpread().getInputs();
+        for (String inputName : inputs) {
+            Input input = chainJob.getInputById(inputName);
+            if (input.getOriginJob().getId().equals(job.getId())) {
+                Output output = job.getOutputById(input.getChainOutput());
+                if (output.getType().equalsIgnoreCase(input.getType()) || usedBySameType(job, output, input.getType())) {
+                    Map<String, List<String>> ins = new HashMap<>();
+                    ins.put(inputName, new LinkedList<>());
+                    ins.get(inputName).add(output.getValue().toString());
+                    Job childJob = getSpreadJob(chainJob, ins, 0, pipeline);
+                    List<ExecutionNode> insideChilds = new LinkedList<>();
+                    childs.add(new ExecutionNode(childJob, insideChilds));
+                    addSpreadJobChilds(pipeline, chainJob, getChainsFrom(pipeline.getJobs(), chainJob), insideChilds);
+                }
+            }
+        }
+    }
+
+    private boolean usedBySameType(Job job, Output output, String type) {
+        if (output.getType().equalsIgnoreCase("string")) {
+            List<String> usedBy = output.getUsedBy();
+            for (String uses : usedBy) {
+                if (job.getOutputById(uses).getType().equalsIgnoreCase(type))
+                    return true;
+            }
+        }
+        return false;
     }
 
     private void updateJoinJobChainInputValues(Job job) throws EngineException {
@@ -98,6 +159,19 @@ public abstract class Engine implements IEngine {
         }
     }
 
+    private void stage(Pipeline pipeline) throws EngineException {
+        ValidateUtils.validateJobs(pipeline.getJobs());
+        copyPipelineInputs(pipeline);
+        schedulePipeline(pipeline);
+        pipeline.getState().setState(StateEnum.SCHEDULE);
+    }
+
+    private void schedulePipeline(Pipeline pipeline) throws EngineException {
+        logger.trace(name + ":: Scheduling pipeline " + pipeline.getName() + " " + pipeline.getName());
+        Collection<ExecutionNode> executionGraph = pipeline.getGraph();
+        run(pipeline, executionGraph);
+    }
+
     private Pipeline internalExecute(boolean parallel, Pipeline pipeline) {
         initState(pipeline);
         registerPipeline(pipeline);
@@ -105,8 +179,8 @@ public abstract class Engine implements IEngine {
         return pipeline;
     }
 
-    private Pipeline createPipelineContext(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                                           Arguments arguments, String id) throws EngineException {
+    private Pipeline createPipeline(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
+                                    Arguments arguments, String id) throws EngineException {
         String pipelineWorkingDirectory = getPipelineWorkingDirectory(id);
         return JobFactory.create(id, pipelineDescriptor, parameters,
         arguments, pipelineWorkingDirectory);
@@ -137,96 +211,7 @@ public abstract class Engine implements IEngine {
     private void execute(Pipeline pipeline, boolean parallel) throws EngineException {
         Collection<ExecutionNode> executionGraph = topologicalSort(pipeline, parallel);
         pipeline.setGraph(executionGraph);
-        List<ExecutionBlock> executionBlocks = getPipelineExecutionBlocks(pipeline);
-        stage(pipeline, executionBlocks);
-    }
-
-    private List<ExecutionBlock> getPipelineExecutionBlocks(Pipeline pipeline) throws EngineException {
-        List<ExecutionBlock> blocks = new LinkedList<>();
-        List<Job> spreadJobs = new LinkedList<>();
-
-        pipeline.getJobs().forEach((j) -> {
-            if (j.getSpread() != null) {
-                spreadJobs.add(j);
-            }
-        });
-        if (spreadJobs.size() == 0) {
-            blocks.add(new ExecutionBlock((List<ExecutionNode>) pipeline.getGraph(), pipeline.getJobs()));
-        } else {
-            List<String> addedNodes = new LinkedList<>();
-            List<Job> execBlockJobs = new LinkedList<>();
-            ExecutionBlock block;
-            List<ExecutionNode> nodes = new LinkedList<>();
-            for (ExecutionNode node : pipeline.getGraph()) {
-                    if (node.getJob().getSpread() == null) {
-                        ExecutionNode parentNode = new ExecutionNode(node.getJob());
-                        nodes.add(parentNode);
-                        addedNodes.add(parentNode.getJob().getId());
-                        addNoSpreadChilds(parentNode, node, addedNodes, pipeline, execBlockJobs);
-                    } else {
-                        addSpreadNodes(node, nodes, addedNodes, execBlockJobs, pipeline, this::getInitInputValues);
-                    }
-            }
-            block = new ExecutionBlock(nodes, execBlockJobs);
-            blocks.add(block);
-
-            List<ExecutionNode> currentNodes = new LinkedList<>(pipeline.getGraph());
-            while (addedNodes.size() != pipeline.getJobs().size()) {
-                getRestOfExecutionBlocks(blocks, addedNodes, currentNodes, pipeline);
-            }
-        }
-        return blocks;
-    }
-
-    private void addNoSpreadChilds(ExecutionNode parentNode, ExecutionNode node, List<String> addedNodes,
-                                   Pipeline pipeline, List<Job> execBlockJobs) throws EngineException {
-        for (ExecutionNode child : node.getChilds()) {
-            Job job = child.getJob();
-            if (job.getSpread() == null) {
-                ExecutionNode childNode = new ExecutionNode(job);
-                parentNode.getChilds().add(childNode);
-                addedNodes.add(childNode.getJob().getId());
-                execBlockJobs.add(job);
-                addNoSpreadChilds(childNode, child, addedNodes, pipeline, execBlockJobs);
-            } else if(!hasChainInput(job)) {
-                addSpreadNodes(child, parentNode.getChilds(), addedNodes, execBlockJobs, pipeline, this::getInitInputValues);
-            }
-        }
-    }
-
-    private void getRestOfExecutionBlocks(List<ExecutionBlock> blocks, List<String> addedNodes,
-                                          List<ExecutionNode> currNodes, Pipeline pipeline) throws EngineException {
-        List<ExecutionNode> nodes = new LinkedList<>();
-        ExecutionBlock block;
-        List<ExecutionNode> nextNodes = new LinkedList<>();
-        List<ExecutionNode> toRemove = new LinkedList<>();
-        List<Job> jobs = new LinkedList<>();
-        for (ExecutionNode node : currNodes) {
-            for (ExecutionNode child : node.getChilds()) {
-                Job job = child.getJob();
-                if (!addedNodes.contains(job.getId())) {
-                    jobs.add(job);
-                    ExecutionNode parentNode = new ExecutionNode(job);
-                    nodes.add(parentNode);
-                    addedNodes.add(parentNode.getJob().getId());
-                   if (job.getSpread() == null) {
-                       addNoSpreadChilds(parentNode, child, addedNodes, pipeline, jobs);
-                   }
-               }
-               nextNodes.add(child);
-            }
-            toRemove.add(node);
-        }
-
-        if (!nodes.isEmpty()) {
-            block = new ExecutionBlock(nodes, jobs);
-            blocks.add(block);
-        }
-
-        for (ExecutionNode node : toRemove) {
-            currNodes.remove(node);
-        }
-        currNodes.addAll(nextNodes);
+        stage(pipeline);
     }
 
     private boolean hasChainInput(Job job) {
@@ -240,26 +225,14 @@ public abstract class Engine implements IEngine {
         return false;
     }
 
-    private void addSpreadNodes(ExecutionNode node, List<ExecutionNode> nodes, List<String> addedNodes, List<Job> jobs,
-                                Pipeline pipeline, BiFunction<Input, Pipeline, List<String>> values) throws EngineException {
-        Job job = node.getJob();
-        addedNodes.add(job.getId());
-        Spread spread = job.getSpread();
-        Map<String, List<String>> valuesOfInputsToSpread = getInputValuesToSpread(job, pipeline, values);
-        if (spread.getStrategy() != null)
-            SpreadCombiner.getInputsCombination(spread.getStrategy(), valuesOfInputsToSpread);
-
-        int idx = 0;
-        int len = getInputValuesLength(valuesOfInputsToSpread);
-
-        while (idx < len) {
-            Job jobToSpread = getSpreadJob(job, valuesOfInputsToSpread, idx, pipeline);
-            jobToSpread.setParents(job.getParents());
-            jobs.add(jobToSpread);
-            ExecutionNode execNode = new ExecutionNode(jobToSpread);
-            nodes.add(execNode);
-            idx++;
+    private static boolean isSpreadChain(Job job, Pipeline pipeline) {
+        for (Input in : job.getInputs()) {
+            if (in.getOriginStep() != null && in.getOriginStep().equals(job.getId())) {
+                if (pipeline.getJobById(in.getOriginStep()).getSpread() != null)
+                    return true;
+            }
         }
+        return false;
     }
 
     private SimpleJob getSpreadJob(Job job, Map<String, List<String>> inputs, int idx, Pipeline pipeline) {
@@ -270,6 +243,7 @@ public abstract class Engine implements IEngine {
             String id = job.getId() + "_" + job.getId() + idx;
             Environment env = copyEnvironment(job, id, pipeline.getEnvironment().getWorkDirectory());
             SimpleJob sJob = new SimpleJob(id, env, simpleJob.getCommand(), executionContext);
+            sJob.setInconclusive(simpleJob.isInconclusive());
             List<Input> jobInputs = getCopyOfJobInputs(job.getInputs(), inputs, idx, simpleJob, pipeline);
             simpleJob.setInputs(jobInputs);
             List<Output> jobOutputs = getCopyOfJobOutputs(job.getOutputs(), simpleJob);
@@ -346,7 +320,7 @@ public abstract class Engine implements IEngine {
             if (originJob.getSpread() != null) {
                 return getOutputValuesFromMultipleJobs(chainOutput, originJob);
             } else {
-                return getOutputValuessFromJob(chainOutput, originJob);
+                return getOutputValuesFromJob(chainOutput, originJob);
             }
         } else
             return getInitInputValues(input, pipeline);
@@ -381,7 +355,6 @@ public abstract class Engine implements IEngine {
                           Map<String, Object> parameters) throws EngineException {
         ValidateUtils.validateRepositories(pipelineDescriptor.getRepositories());
         ValidateUtils.validateOutputs(pipelineDescriptor, parameters);
-        ValidateUtils.validateSteps(pipelineDescriptor, parameters);
         ValidateUtils.validateNonCyclePipeline(pipelineDescriptor, parameters);
     }
 
