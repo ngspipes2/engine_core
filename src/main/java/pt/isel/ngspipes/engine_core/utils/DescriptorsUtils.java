@@ -12,6 +12,7 @@ import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.CommandExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
+import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IParameterInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.ISimpleInputDescriptor;
@@ -22,6 +23,8 @@ import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 import utils.ToolsRepositoryException;
 
 import java.util.Collection;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
 public class DescriptorsUtils {
@@ -153,7 +156,7 @@ public class DescriptorsUtils {
         return DescriptorsUtils.getPipelineDescriptor(repo, exec.getPipelineName());
     }
 
-    static IToolRepositoryDescriptor getToolRepositoryDescriptorById(String repoId, Collection<IRepositoryDescriptor> repos) {
+    public static IToolRepositoryDescriptor getToolRepositoryDescriptorById(String repoId, Collection<IRepositoryDescriptor> repos) {
 
         for (IRepositoryDescriptor repo : repos)
             if (repo.getId().equals(repoId))

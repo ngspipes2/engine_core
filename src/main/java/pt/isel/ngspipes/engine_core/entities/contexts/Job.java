@@ -26,6 +26,12 @@ public abstract class Job {
     boolean inconclusive;
 
     @JsonIgnore
+    private final List<Job> chainsFrom = new LinkedList<>();
+
+    @JsonIgnore
+    private final List<Job> chainsTo = new LinkedList<>();
+
+    @JsonIgnore
     private Environment environment;
 
     @JsonIgnore
@@ -55,6 +61,12 @@ public abstract class Job {
 
     public void setEnvironment(Environment environment) { this.environment = environment; }
     public Environment getEnvironment() { return environment; }
+
+    public List<Job> getChainsFrom() { return chainsFrom; }
+    public void addChainsFrom(Job chainFrom) { this.chainsFrom.add(chainFrom); }
+
+    public List<Job> getChainsTo() { return chainsTo; }
+    public void addChainsTo(Job chainTo) { this.chainsTo.add(chainTo); }
 
     public ExecutionState getState() { return state; }
     public void setState(ExecutionState state) { this.state = state; }
