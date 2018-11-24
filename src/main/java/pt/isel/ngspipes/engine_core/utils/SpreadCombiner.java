@@ -4,7 +4,6 @@ import pt.isel.ngspipes.engine_core.entities.contexts.strategy.ICombineStrategy;
 import pt.isel.ngspipes.engine_core.entities.contexts.strategy.IStrategy;
 import pt.isel.ngspipes.engine_core.entities.contexts.strategy.InputStrategy;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
-import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IInputStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IOneToManyStrategyDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.spread.strategyDescriptor.IOneToOneStrategyDescriptor;
 
@@ -21,8 +20,8 @@ public class SpreadCombiner {
         IStrategy first = strategy.getFirstStrategy();
         IStrategy second = strategy.getSecondStrategy();
 
-        if (first instanceof IInputStrategyDescriptor) {
-            if (second instanceof IInputStrategyDescriptor) {
+        if (first instanceof InputStrategy) {
+            if (second instanceof InputStrategy) {
                 combineInputs(inputsToSpread, strategy);
             } else {
                 getInputsCombination((ICombineStrategy) second, inputsToSpread);
@@ -37,8 +36,8 @@ public class SpreadCombiner {
 
     private static void combineInputs(Map<String, List<String>> inputsToSpread,
                                       ICombineStrategy strategy) throws EngineException {
-        IInputStrategyDescriptor firstStrategy = (IInputStrategyDescriptor) strategy.getFirstStrategy();
-        IInputStrategyDescriptor secondStrategy = (IInputStrategyDescriptor) strategy.getSecondStrategy();
+        InputStrategy firstStrategy = (InputStrategy) strategy.getFirstStrategy();
+        InputStrategy secondStrategy = (InputStrategy) strategy.getSecondStrategy();
         if (strategy instanceof IOneToOneStrategyDescriptor) {
             ValidateUtils.validateInputValues(inputsToSpread, firstStrategy.getInputName(), secondStrategy.getInputName());
         } else if (strategy instanceof IOneToManyStrategyDescriptor) {

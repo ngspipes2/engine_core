@@ -73,7 +73,7 @@ public class EngineMesos extends Engine {
     @Override
     public void run(Pipeline pipeline, Collection<ExecutionNode> executionGraph) {
         TASKS_BY_EXEC_ID.put(pipeline.getName(), pipeline.getJobs());
-        scheduleParentsTasks(executionGraph, pipeline.getName());
+        schedule(executionGraph, pipeline);
     }
 
     @Override
@@ -82,7 +82,7 @@ public class EngineMesos extends Engine {
     }
 
     @Override
-    List<String> getOutputValuesFromMultipleJobs(String chainOutput, Job originJob) {
+    List<String> getOutputValuesFromSpreadJob(String chainOutput, Job originJob, String spreadId) {
         throw new NotImplementedException();
     }
 
@@ -115,7 +115,7 @@ public class EngineMesos extends Engine {
         logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
                 + pipeline.getName() + " inputs.");
 
-        updateEnvironment(pipeline.getEnvironment());
+         updateEnvironment(pipeline.getEnvironment());
         ChannelSftp sftp = null;
         try {
             SSHConfig config = getSshConfig();
@@ -161,32 +161,33 @@ public class EngineMesos extends Engine {
     }
 
     private static SSHConfig getSshConfig() {
-        //SSHConfig config = new SSHConfig(SSH_USER, SSH_PASSWORD, KEY_PATH, SSH_HOST, SSH_PORT);
+//        return new SSHConfig(SSH_USER, SSH_PASSWORD, KEY_PATH, SSH_HOST, SSH_PORT);
         return new SSHConfig(SSH_USER, SSH_PASSWORD, SSH_HOST, SSH_PORT);
     }
 
 
 
-    private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId) {
+    private void schedule(Collection<ExecutionNode> executionGraph, Pipeline pipeline) {
         try {
-            executeParents(executionGraph, executionId);
+            for (ExecutionNode node : executionGraph) {
+                executeBranch(node, pipeline);
+            }
         } catch (EngineException e) {
             ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
-            updatePipelineState(executionId, state);
+            updatePipelineState(pipeline.getName(), state);
         }
     }
 
-    private void executeParents(Collection<ExecutionNode> executionGraph, String executionId)
-            throws EngineException {
-        for (ExecutionNode parentNode : executionGraph) {
-            Job job = parentNode.getJob();
-            try {
-                logger.trace(TAG + ":: Executing step " + job.getId());
-                runTask(job, pipelines.get(executionId));
-            } catch (Exception e) {
-                logger.error(TAG + ":: Executing step " + job.getId(), e);
-                throw new EngineException("Error executing step: " + job.getId(), e);
-            }
+    private void executeBranch(ExecutionNode node, Pipeline pipeline) throws EngineException {
+        runTask(node.getJob(), pipeline);
+        scheduleChilds(node.getChilds(), pipeline);
+
+    }
+
+    private void scheduleChilds(List<ExecutionNode> childs, Pipeline pipeline) throws EngineException {
+        for (ExecutionNode child : childs) {
+            runTask(child.getJob(), pipeline);
+            scheduleChilds(child.getChilds(), pipeline);
         }
     }
 
@@ -197,54 +198,99 @@ public class EngineMesos extends Engine {
 
         if (job instanceof ComposeJob) {
             throw new NotImplementedException();
-//            executeSubPipeline(job.getId(), pipeline);
-//            return;
         }
 
-        SimpleJob stepCtx = (SimpleJob) job;
-        if (stepCtx.getSpread() != null) {
-            runSpreadStep(pipeline, stepCtx);
+        SimpleJob simpleJob = (SimpleJob) job;
+        if (simpleJob.getSpread() != null) {
+            LinkedList<ExecutionNode> graph = new LinkedList<>();
+            expandSpreadJob(pipeline, simpleJob, graph);
+            run(pipeline, graph);
         } else {
-            execute(pipeline, stepCtx);
+            execute(pipeline, simpleJob);
         }
     }
 
-    private void execute(Pipeline pipeline, SimpleJob stepCtx) throws EngineException {
-        copyChainInputs(stepCtx, pipeline);
-        run(stepCtx, pipeline);
+    private void execute(Pipeline pipeline, SimpleJob job) throws EngineException {
+        copyChainInputs(job, pipeline);
+        run(job, pipeline);
     }
 
-    private void run(SimpleJob stepCtx, Pipeline pipeline) throws EngineException {
-        String executeCmd = getExecutionCommand(stepCtx, pipeline);
+    private void run(SimpleJob job, Pipeline pipeline) throws EngineException {
+        String executeCmd = getExecutionCommand(job, pipeline);
         try {
-            reporter.reportInfo("Executing step: " + stepCtx.getId()
+            reporter.reportInfo("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName());
-            IOUtils.createFolder(stepCtx.getEnvironment().getOutputsDirectory());
-            String chronosJob = getChronosJob(executeCmd, stepCtx, pipeline.getName());
-            HttpUtils.post(chronosEndpoint + CHRONOS_ISO, chronosJob);
-            validateOutputs(stepCtx);
-        } catch (EngineException | IOException e) {
-            logger.error("Executing step: " + stepCtx.getId()
+            IOUtils.createFolder(job.getEnvironment().getOutputsDirectory());
+            String chronosJob = getChronosJob(executeCmd, job, pipeline.getName());
+            String url = chronosEndpoint + CHRONOS_ISO;
+            if (!job.getParents().isEmpty())
+                url = chronosEndpoint + CHRONOS_DEPENDENCY;
+            HttpUtils.post(url, chronosJob);
+//            validateOutputs(job);
+        } catch (IOException e) {
+            logger.error("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
-            throw new EngineException("Error executing step: " + stepCtx.getId()
+            throw new EngineException("Error executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
         }
     }
 
-    private String getChronosJob(String executeCmd, SimpleJob stepCtx, String executionId) {
-        String jobDir = BASE_DIRECTORY + File.separatorChar + executionId + File.separatorChar + stepCtx.getId();
-        String dockerUri = getDockerUri(stepCtx.getExecutionContext().getConfig());
-        String job = "{\"schedule\":\"R1//PT30M\",\"name\": \"" + executionId + "_" + stepCtx.getId() + "\"," +
+    private String getChronosJob(String executeCmd, SimpleJob job, String executionId) {
+        String jobDir = BASE_DIRECTORY + File.separatorChar + executionId + File.separatorChar + job.getId();
+        String dockerUri = getDockerUri(job.getExecutionContext().getConfig());
+        if (job.getParents().isEmpty())
+            return getChronosJob(executeCmd, job, executionId, jobDir, dockerUri);
+        else
+            return getDependentChronosJob(executeCmd, job, executionId, jobDir, dockerUri);
+    }
+
+    private String getDependentChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir, String dockerUri) {
+        return "{\"parents\":\"" + getParents(job.getParents()) + "\",\"name\": \"" + executionId + "_" + job.getId() + "\"," +
                 " \"container\": {\"type\": \"DOCKER\",\"image\": \"" + dockerUri + "\",\n" +
                 "\"network\": \"HOST\",\"volumes\": [ {\"containerPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
                 " \"hostPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
                 " \"mode\": \"RW\"}]}," +
-                " \"cpus\": \"0.5\",\"mem\": \"2048\",\"uris\": []," +
+                " \"cpus\": \"" + getCpus(job) + "\",\"mem\":\"" + getMemory(job) + "\",\"uris\": []," +
                 "\"shell\": \"true\"," +
                 "\"command\": \"mkdir -p " + jobDir + " && " +
                 "cd " + jobDir + " && " +
                 executeCmd + "\"}";
-        return job;
+    }
+
+    private int getMemory(SimpleJob job) {
+        int memory = job.getEnvironment().getMemory();
+        return memory == 0 ? 2048 : memory;
+    }
+
+    private float getCpus(SimpleJob job) {
+        int cpu = job.getEnvironment().getCpu();
+        return cpu == 0 ? 0.5f : cpu/10;
+    }
+
+    private String getParents(Collection<String> parents) {
+        StringBuilder sb = new StringBuilder("[");
+
+        for (String parent : parents) {
+            sb.append(parent).append(",");
+        }
+
+        sb.deleteCharAt(sb.length() - 1);
+        sb.append("]");
+
+        return sb.toString();
+    }
+
+    private String getChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir, String dockerUri) {
+        return "{\"schedule\":\"R1//PT30M\",\"name\": \"" + executionId + "_" + job.getId() + "\"," +
+                " \"container\": {\"type\": \"DOCKER\",\"image\": \"" + dockerUri + "\",\n" +
+                "\"network\": \"HOST\",\"volumes\": [ {\"containerPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
+                " \"hostPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
+                " \"mode\": \"RW\"}]}," +
+                " \"cpus\": \"" + getCpus(job) + "\",\"mem\": \"" + getMemory(job) + "\",\"uris\": []," +
+                "\"shell\": \"true\"," +
+                "\"command\": \"mkdir -p " + jobDir + " && " +
+                "cd " + jobDir + " && " +
+                executeCmd + "\"}";
     }
 
     private String getDockerUri(Map<String, Object> config) {
@@ -255,36 +301,17 @@ public class EngineMesos extends Engine {
         return dockerUri;
     }
 
-    private String  getExecutionCommand(SimpleJob stepCtx, Pipeline pipeline) throws EngineException {
+    private String  getExecutionCommand(SimpleJob job, Pipeline pipeline) throws EngineException {
         try {
-            String command = CommandBuilderSupplier.getCommandBuilder("Local").build(pipeline, stepCtx.getId());
-//            String command = stepCtx.getCommandBuilder().build(pipeline, stepCtx.getId());
+            String command = CommandBuilderSupplier.getCommandBuilder("Local").build(pipeline, job);
+//            String command = job.getCommandBuilder().build(pipeline, job.getId());
             return String.format(RUN_CMD, command);
         } catch (CommandBuilderException e) {
-            logger.error(TAG + ":: Error when building step - " + stepCtx.getId(), e);
+            logger.error(TAG + ":: Error when building step - " + job.getId(), e);
             throw new EngineException("Error when building step", e);
         }
     }
 
-
-    private void runSpreadStep(Pipeline pipeline, SimpleJob stepCtx) throws EngineException {
-        Spread spread = stepCtx.getSpread();
-//        Map<String, Collection<String>> valuesOfInputsToSpread = getInputValuesToSpread(stepCtx, pipeline);
-//        SpreadCombiner.getInputsCombination(spread.getStrategy(), valuesOfInputsToSpread);
-//
-//        int idx = 0;
-//        int len = getInputValuesLength(valuesOfInputsToSpread);
-//
-//        while (idx < len) {
-//            SimpleJob stepContext = getSpreadStepContext(stepCtx, valuesOfInputsToSpread, idx);
-//            try {
-//                execute(pipeline, stepContext);
-//            } catch (EngineException e) {
-//                updateState(pipeline, stepContext, e);
-//            }
-//            idx++;
-//        }
-    }
 
     public static boolean isJobSuccess(String url, String jobName) {
         url = url + "jobs/search?name=" + jobName;

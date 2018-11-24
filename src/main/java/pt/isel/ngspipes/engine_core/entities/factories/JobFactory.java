@@ -1,11 +1,12 @@
-package pt.isel.ngspipes.engine_core.utils;
+package pt.isel.ngspipes.engine_core.entities.factories;
 
-import pt.isel.ngspipes.engine_core.entities.Arguments;
 import pt.isel.ngspipes.engine_core.entities.Environment;
-import pt.isel.ngspipes.engine_core.entities.PipelineEnvironment;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.entities.contexts.strategy.*;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
+import pt.isel.ngspipes.engine_core.utils.DescriptorsUtils;
+import pt.isel.ngspipes.engine_core.utils.RepositoryUtils;
+import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IPipelineRepositoryDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IRepositoryDescriptor;
@@ -13,7 +14,6 @@ import pt.isel.ngspipes.pipeline_descriptor.repository.IToolRepositoryDescriptor
 import pt.isel.ngspipes.pipeline_descriptor.step.IStepDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.CommandExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
-import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IPipelineExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IChainInputDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.input.IInputDescriptor;
@@ -29,93 +29,11 @@ import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
 
 import java.io.File;
 import java.util.*;
-import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class JobFactory {
 
-    public static Pipeline create(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                                  Arguments arguments, String workingDirectory) throws EngineException {
-
-        PipelineEnvironment environment = getPipelineEnvironment(arguments, workingDirectory);
-        List<Job> jobs = getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory());
-        Pipeline pipeline = new Pipeline(jobs, executionId, environment);
-        setStepsResources(pipeline, pipelineDescriptor, parameters);
-        setOutputs(pipeline::setOutputs, pipelineDescriptor, pipeline.getJobs());
-        return pipeline;
-    }
-
-    private static void setOutputs(Consumer<List<Output>> consumer, IPipelineDescriptor pipelineDescriptor, List<Job> jobs) {
-        List<Output> outputs = new LinkedList<>();
-
-        if (pipelineDescriptor.getOutputs().isEmpty()) {
-            outputs.addAll(getJobsOutputs(jobs));
-        }
-
-        for (pt.isel.ngspipes.pipeline_descriptor.output.IOutputDescriptor outputDesc : pipelineDescriptor.getOutputs()) {
-            String stepId = outputDesc.getStepId();
-            String outName = outputDesc.getOutputName();
-            Job jobById = getJobById(jobs, stepId);
-            Output outputById = Objects.requireNonNull(jobById).getOutputById(outName);
-            Output output = new Output(outputDesc.getName(), jobById, outputById.getType(), outputById.getValue());
-            outputs.add(output);
-        }
-
-        consumer.accept(outputs);
-    }
-
-    private static Job getJobById(List<Job> jobs, String stepId) {
-        for (Job job : jobs)
-            if (job.getId().equals(stepId))
-                return job;
-        return null;
-    }
-
-    private static Collection<Output> getJobsOutputs(List<Job> jobs) {
-        List<Output> outputs = new LinkedList<>();
-
-        for (Job job : jobs)
-            outputs.addAll(job.getOutputs());
-
-        return outputs;
-    }
-
-    private static Map<String, IPipelinesRepository> getPipelinesRepositories(Collection<IRepositoryDescriptor> repositories,
-                                                                              Map<String, Object> parameters) throws EngineException {
-        Map<String, IPipelinesRepository> pipelinesRepositoryMap = new HashMap<>();
-
-        for (IRepositoryDescriptor repo : repositories) {
-            if(pipelinesRepositoryMap.containsKey(repo.getId()))
-                throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
-            if (repo instanceof IPipelineRepositoryDescriptor) {
-                IPipelineRepositoryDescriptor pRepoDesc = (IPipelineRepositoryDescriptor) repo;
-                IPipelinesRepository pipelinesRepo = RepositoryUtils.getPipelinesRepository(pRepoDesc, parameters);
-                pipelinesRepositoryMap.put(repo.getId(), pipelinesRepo);
-            }
-        }
-
-        return pipelinesRepositoryMap;
-    }
-
-    private static Map<String,IToolsRepository> getToolsRepositories(Collection<IRepositoryDescriptor> repositories,
-                                                                     Map<String, Object> parameters) throws EngineException {
-        Map<String, IToolsRepository> toolsRepositoryMap = new HashMap<>();
-
-        for (IRepositoryDescriptor repo : repositories) {
-            if(toolsRepositoryMap.containsKey(repo.getId()))
-                throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
-            if (repo instanceof IToolRepositoryDescriptor) {
-                IToolRepositoryDescriptor toolsRepoDesc = (IToolRepositoryDescriptor) repo;
-                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
-                toolsRepositoryMap.put(repo.getId(), toolsRepo);
-            }
-        }
-
-        return toolsRepositoryMap;
-    }
-
-    private static List<Job> getJobs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
+    static List<Job> getJobs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
                                      String workingDirectory) throws EngineException {
 
         Map<String, IToolsRepository> toolsRepos = getToolsRepositories(pipelineDesc.getRepositories(), parameters);
@@ -124,6 +42,46 @@ public class JobFactory {
         addJobs(pipelineDesc, parameters, workingDirectory, toolsRepos, pipelinesRepos, "", jobsCmdMap);
         setJobsInOut(pipelineDesc, parameters, toolsRepos, pipelinesRepos, jobsCmdMap);
         return jobsCmdMap.values().stream().map(Map.Entry::getKey).collect(Collectors.toList());
+    }
+
+    static void expandReadyJobs(List<Job> jobs, Pipeline pipeline) {
+        List<Job> toRemove = new LinkedList<>();
+        for (Job job : jobs) {
+            if (job.getSpread() != null) {
+                List<Input> chainInputs = getChainInputs(job);
+                if (chainInputs.isEmpty()) { // not chain not dependent
+
+                } else {
+
+                }
+            }
+        }
+    }
+
+
+
+    public static Environment getJobEnvironment(String id, String workingDirectory)
+    {
+        String stepWorkDir = workingDirectory + File.separatorChar + id;
+        Environment environment = new Environment();
+//        environment.setOutputsDirectory(stepWorkDir + File.separatorChar  + "outputs");
+        environment.setOutputsDirectory(stepWorkDir);
+        environment.setWorkDirectory(stepWorkDir);
+        return environment;
+    }
+
+
+
+    private static List<Input> getChainInputs(Job job) {
+        List<Input> inputs = new LinkedList<>();
+        for (Input input : job.getInputs()) {
+            if (input.getOriginStep() == null)
+                continue;
+            if (!input.getOriginStep().equals(job.getId()))
+                inputs.add(input);
+        }
+
+        return inputs;
     }
 
     private static void addJobs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
@@ -203,6 +161,19 @@ public class JobFactory {
         }
     }
 
+    private static Job getOriginJobByStepId(Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, String stepId) {
+        if (jobCmdMap.containsKey(stepId))
+            return jobCmdMap.get(stepId).getKey();
+        else {
+            for (Map.Entry<Job, ICommandDescriptor> entry : jobCmdMap.values()) {
+                Job job = entry.getKey();
+                if (job.getId().contains(stepId))
+                    return job;
+            }
+        }
+        return null;
+    }
+
     private static void setJobsInOut(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
                                      Map<String, IToolsRepository> toolsRepos,
                                      Map<String, IPipelinesRepository> pipelinesRepos,
@@ -263,52 +234,6 @@ public class JobFactory {
         }
     }
 
-    private static void setStepsResources(Pipeline pipeline, IPipelineDescriptor pipelineDescriptor,
-                                          Map<String, Object> parameters) throws EngineException {
-
-        for (Job job : pipeline.getJobs()) {
-            Arguments arguments = getStepArguments(pipeline, job, pipelineDescriptor, parameters);
-            job.getEnvironment().setMemory(arguments.mem);
-            job.getEnvironment().setDisk(arguments.disk);
-            job.getEnvironment().setCpu(arguments.cpus);
-        }
-    }
-
-    private static String generateSubJobId(String subId, String stepId) {
-        return stepId + "_" + subId;
-    }
-
-    private static ICombineStrategy getStrategy(ISpreadDescriptor spread) {
-        ICombineStrategyDescriptor strategy = spread.getStrategy();
-        return getCombineStrategy(strategy);
-    }
-
-    private static ICombineStrategy getCombineStrategy(ICombineStrategyDescriptor strategy) {
-
-        IStrategyDescriptor first = strategy.getFirstStrategy();
-        IStrategyDescriptor second = strategy.getSecondStrategy();
-
-        if (first instanceof IInputStrategyDescriptor) {
-            if (second instanceof IInputStrategyDescriptor) {
-                InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) first).getInputName());
-                InputStrategy in1 = new InputStrategy(((IInputStrategyDescriptor) second).getInputName());
-                return new OneToOneStrategy(in, in1);
-            } else {
-                InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) first).getInputName());
-                IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) second);
-                return new OneToManyStrategy(in, strategy1);
-            }
-        } else if (second instanceof IInputStrategyDescriptor) {
-            InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) second).getInputName());
-            IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) first);
-            return new OneToManyStrategy(strategy1, in);
-        } else {
-            IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) first);
-            IStrategy strategy2 = getCombineStrategy((ICombineStrategyDescriptor) second);
-            return new OneToManyStrategy(strategy1, strategy2);
-        }
-
-    }
 
     private static ExecutionContext getExecutionContext(Map<String, Object> parameters, IStepDescriptor step, IToolDescriptor tool) {
         IExecutionContextDescriptor execCtx = DescriptorsUtils.getExecutionContext(tool.getExecutionContexts(), step.getExecutionContext(), parameters);
@@ -323,101 +248,12 @@ public class JobFactory {
         Map<String, List<String>> usedBy = new HashMap<>();
 
         for (IOutputDescriptor output : jobCmdMap.get(job.getId()).getValue().getOutputs()) {
-            String name = output.getName();
-            if (!visitOutputs.contains(name)) {
-                String outputValue = output.getValue();
-                String type = output.getType();
-                String value = getOutputValue(inputs, outputs, output.getName(), outputValue, visitOutputs,
-                                                jobCmdMap, job, usedBy, type);
-                Output outContext = new Output(output.getName(), job, type, value);
-                outputs.add(outContext);
-                visitOutputs.add(name);
-            }
+            addOutput(job, jobCmdMap, inputs, outputs, visitOutputs, usedBy, output);
         }
 
-        for (Output out : outputs) {
-            if (usedBy.containsKey(out.getName()))
-                out.setUsedBy(usedBy.get(out.getName()));
-        }
+        setUsedBy(outputs, usedBy);
 
         return outputs;
-    }
-
-    private static String getOutputValue(List<Input> inputs, List<Output> outputs, String outputName,
-                                         String outputValue, List<String> visit,
-                                         Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
-                                         Job job, Map<String, List<String>> usedBy, String type) throws EngineException {
-        StringBuilder value = new StringBuilder();
-        if (outputValue.contains("$")) {
-            if (outputValue.indexOf("$") != outputValue.lastIndexOf("$")) {
-                String[] splittedByDependency = outputValue.split("$");
-                for (String val : splittedByDependency) {
-                    dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
-                }
-            } else {
-                int idx = outputValue.indexOf("$") + 1;
-                String val = outputValue.substring(idx);
-                dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
-            }
-        } else {
-            value.append(outputValue);
-        }
-        return value.toString();
-    }
-
-    private static void dependentOutValue(List<Input> inputs, List<Output> outputs, List<String> visit,
-                                          Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, Job job,
-                                          StringBuilder value, String outName, Map<String, List<String>> usedBy,
-                                          String outputName, String type) throws EngineException {
-        int idxLast = outName.indexOf(File.separatorChar);
-        String val = outName;
-        if (idxLast != -1)
-            val = outName.substring(0, idxLast);
-
-        Collection<IOutputDescriptor> cmdOutputs = jobCmdMap.get(job.getId()).getValue().getOutputs();
-        List<IOutputDescriptor> orderedOutputs = getOutputsOrderedByNameLength(cmdOutputs);
-        IOutputDescriptor output = null;
-        for (IOutputDescriptor outputDescriptor : orderedOutputs) {
-            if (val.contains(outputDescriptor.getName())) {
-                output = outputDescriptor;
-                break;
-            }
-        }
-
-        if (output != null) {
-            String outputVal = getOutputValue(inputs, outputs, output.getName(), output.getValue(), visit, jobCmdMap,
-                                                job, usedBy, type);
-            outputVal = outName.replace(output.getName(), outputVal);
-
-            if (!usedBy.containsKey(output.getName()))
-                usedBy.put(output.getName(), new LinkedList<>());
-            if (!usedBy.get(output.getName()).contains(outputName))
-                usedBy.get(output.getName()).add(outputName);
-            visit.add(output.getName());
-            value.append(outputVal);
-        } else {
-            getOutputDependentValue(inputs, value, outName);
-        }
-    }
-
-    private static List<IOutputDescriptor> getOutputsOrderedByNameLength(Collection<IOutputDescriptor> outputs) {
-        List<IOutputDescriptor> orderedOutputs = new LinkedList<>(outputs);
-
-        Comparator<IOutputDescriptor> outputLengthComparator = (i0, i1) -> Integer.compare(i1.getName().length(), i0.getName().length());
-        Collections.sort(orderedOutputs, outputLengthComparator);
-
-        return orderedOutputs;
-    }
-
-    private static void getOutputDependentValue(List<Input> inputs, StringBuilder value, String outName) {
-        List<Input> orderedInputs = orderInputsByNameLength(inputs);
-        for (Input input : orderedInputs) {
-            if (outName.contains(input.getName())) {
-                String outVal = outName.replace(input.getName(), input.getValue().toString());
-                value.append(outVal);
-                return;
-            }
-        }
     }
 
     private static List<Input> getInputs(Map<String, Object> params, Job job,
@@ -425,7 +261,7 @@ public class JobFactory {
                                          Map<String, IToolsRepository> toolsRepos,
                                          Map<String, IPipelinesRepository> pipeRepos,
                                          IPipelineDescriptor pipelinesDesc, IStepDescriptor step)
-                                                      throws EngineException {
+            throws EngineException {
 
         String jobId = job.getId();
         List<Input> inputs = new LinkedList<>();
@@ -497,22 +333,9 @@ public class JobFactory {
         Job originJob = getOriginJobByStepId(jobCmdMap, stepId);
         assert originJob != null;
         Input inputContext = new Input(name, originJob, outName, param.getType(),
-                                        inputValue.toString(), getFix(param.getPrefix()), getFix(param.getSeparator()),
-                                        getFix(param.getSuffix()), new LinkedList<>());
+                inputValue.toString(), getFix(param.getPrefix()), getFix(param.getSeparator()),
+                getFix(param.getSuffix()), new LinkedList<>());
         inputs.add(inputContext);
-    }
-
-    private static Job getOriginJobByStepId(Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, String stepId) {
-        if (jobCmdMap.containsKey(stepId))
-            return jobCmdMap.get(stepId).getKey();
-        else {
-            for (Map.Entry<Job, ICommandDescriptor> entry : jobCmdMap.values()) {
-                Job job = entry.getKey();
-                if (job.getId().contains(stepId))
-                    return job;
-            }
-        }
-        return null;
     }
 
     private static void addSubInputs(Map<String, Object> params, IStepDescriptor step, Map<String, IToolsRepository> toolsRepos,
@@ -549,10 +372,10 @@ public class JobFactory {
     }
 
     private static Map.Entry<String, Map.Entry<String, String>> getInputValue(Map<String, Object> params,
-                                                                        Map<String, IToolsRepository> toolsRepos,
-                                                                        Map<String, IPipelinesRepository> pipesRepos,
-                                                                        IPipelineDescriptor pipeDesc,
-                                                                        IInputDescriptor input) throws EngineException {
+                                                                              Map<String, IToolsRepository> toolsRepos,
+                                                                              Map<String, IPipelinesRepository> pipesRepos,
+                                                                              IPipelineDescriptor pipeDesc,
+                                                                              IInputDescriptor input) throws EngineException {
         StringBuilder value = new StringBuilder();
         String stepId = "";
         String outName = "";
@@ -664,83 +487,6 @@ public class JobFactory {
         return val;
     }
 
-    public static Environment getJobEnvironment(String id, String workingDirectory)
-    {
-        String stepWorkDir = workingDirectory + File.separatorChar + id;
-        Environment environment = new Environment();
-//        environment.setOutputsDirectory(stepWorkDir + File.separatorChar  + "outputs");
-        environment.setOutputsDirectory(stepWorkDir);
-        environment.setWorkDirectory(stepWorkDir);
-        return environment;
-    }
-
-    public static PipelineEnvironment getPipelineEnvironment(Arguments arguments, String workingDirectory) {
-        PipelineEnvironment environment = new PipelineEnvironment();
-        environment.setCpu(arguments.cpus);
-        environment.setDisk(arguments.disk);
-        environment.setMemory(arguments.mem);
-        environment.setOutputsDirectory(arguments.outPath);
-        environment.setWorkDirectory(workingDirectory);
-        return environment;
-    }
-
-    private static Arguments getStepArguments(Pipeline pipeline, Job stepCtx,
-                                              IPipelineDescriptor pipelineDescriptor, Map<String, Object> params) throws EngineException {
-        Environment environment = pipeline.getEnvironment();
-        Arguments args = new Arguments();
-        String stepId = stepCtx.getId();
-        int mem = getValue(pipeline, stepId, environment.getMemory(), ICommandDescriptor::getRecommendedMemory, pipelineDescriptor, params);
-        int cpus = getValue(pipeline, stepId, environment.getCpu(), ICommandDescriptor::getRecommendedCpu, pipelineDescriptor, params);
-        int disk = getValue(pipeline, stepId, environment.getDisk(), ICommandDescriptor::getRecommendedDisk, pipelineDescriptor, params);
-        int pipelineMem = pipeline.getEnvironment().getMemory();
-        int pipelineCpu = pipeline.getEnvironment().getCpu();
-        int pipelineDisk = pipeline.getEnvironment().getDisk();
-        args.mem = mem > pipelineMem ? pipelineMem : mem;
-        args.cpus = cpus > pipelineCpu ? pipelineCpu : cpus;
-        args.disk = disk > pipelineDisk ? pipelineDisk : disk;
-        return args;
-    }
-
-    private static int getValue(Pipeline pipeline, String stepID, int value, Function<ICommandDescriptor, Integer> func,
-                                IPipelineDescriptor pipelineDesc, Map<String, Object> params) throws EngineException {
-
-        Job stepCtx = pipeline.getJobById(stepID);
-        if (stepCtx instanceof SimpleJob) {
-            IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
-            assert step != null;
-            String repositoryId = step.getExec().getRepositoryId();
-            IToolRepositoryDescriptor toolRepo = DescriptorsUtils.getToolRepositoryDescriptorById(repositoryId, pipelineDesc.getRepositories());
-            assert toolRepo != null;
-            IToolsRepository repo = RepositoryUtils.getToolsRepository(toolRepo, params);
-            Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
-            return value < stepValue ? value : stepValue;
-        } else if (stepCtx instanceof ComposeJob){
-            int highestValueFromPipeline = getHighestValueFromPipeline(pipelineDesc, params, func);
-            return value < highestValueFromPipeline ? value : highestValueFromPipeline;
-        }
-        return value;
-    }
-
-    // NÃO ESTOU A CONSIDERAR OS STEPS K SEJAM SUBPIPELINE DESTE SUBPIPELINE
-    private static int getHighestValueFromPipeline(IPipelineDescriptor pipelineDesc, Map<String, Object> params,
-                                                   Function<ICommandDescriptor, Integer> func) throws EngineException {
-        Map<String, IToolsRepository> toolsRepos = getToolsRepositories(pipelineDesc.getRepositories(), params);
-
-        int highest = 0;
-        for (IStepDescriptor stepDesc : pipelineDesc.getSteps()) {
-            IExecDescriptor execDesc = stepDesc.getExec();
-            if (execDesc instanceof ICommandDescriptor) {
-                IToolsRepository toolsRepo = toolsRepos.get(execDesc.getRepositoryId());
-                ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) execDesc);
-                int value = func.apply(commandDescriptor);
-                if (highest < value) {
-                    highest = value;
-                }
-            }
-        }
-        return highest;
-    }
-
     private static String getSimpleInputValue(ISimpleInputDescriptor inputDescriptor) {
         Object inputValue = inputDescriptor.getValue();
         if (inputValue == null)
@@ -756,6 +502,99 @@ public class JobFactory {
         return inputValue;
     }
 
+    private static void addOutput(Job job, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
+                                  List<Input> inputs, List<Output> outputs, List<String> visitOutputs,
+                                  Map<String, List<String>> usedBy, IOutputDescriptor output) throws EngineException {
+        String name = output.getName();
+        if (!visitOutputs.contains(name)) {
+            String outputValue = output.getValue();
+            String type = output.getType();
+            String value = getOutputValue(inputs, outputs, output.getName(), outputValue, visitOutputs,
+                    jobCmdMap, job, usedBy, type);
+            Output outContext = new Output(output.getName(), job, type, value);
+            outputs.add(outContext);
+            visitOutputs.add(name);
+        }
+    }
+
+
+    private static String getOutputValue(List<Input> inputs, List<Output> outputs, String outputName,
+                                         String outputValue, List<String> visit,
+                                         Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
+                                         Job job, Map<String, List<String>> usedBy, String type) throws EngineException {
+        StringBuilder value = new StringBuilder();
+        if (outputValue.contains("$")) {
+            if (outputValue.indexOf("$") != outputValue.lastIndexOf("$")) {
+                String[] splittedByDependency = outputValue.split("$");
+                for (String val : splittedByDependency) {
+                    dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
+                }
+            } else {
+                int idx = outputValue.indexOf("$") + 1;
+                String val = outputValue.substring(idx);
+                dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
+            }
+        } else {
+            value.append(outputValue);
+        }
+        return value.toString();
+    }
+
+    private static void dependentOutValue(List<Input> inputs, List<Output> outputs, List<String> visit,
+                                          Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, Job job,
+                                          StringBuilder value, String outName, Map<String, List<String>> usedBy,
+                                          String outputName, String type) throws EngineException {
+        int idxLast = outName.indexOf(File.separatorChar);
+        String val = outName;
+        if (idxLast != -1)
+            val = outName.substring(0, idxLast);
+
+        Collection<IOutputDescriptor> cmdOutputs = jobCmdMap.get(job.getId()).getValue().getOutputs();
+        List<IOutputDescriptor> orderedOutputs = getOutputsOrderedByNameLength(cmdOutputs);
+        IOutputDescriptor output = null;
+        for (IOutputDescriptor outputDescriptor : orderedOutputs) {
+            if (val.contains(outputDescriptor.getName())) {
+                output = outputDescriptor;
+                break;
+            }
+        }
+
+        if (output != null) {
+            String outputVal = getOutputValue(inputs, outputs, output.getName(), output.getValue(), visit, jobCmdMap,
+                    job, usedBy, type);
+            outputVal = outName.replace(output.getName(), outputVal);
+
+            if (!usedBy.containsKey(output.getName()))
+                usedBy.put(output.getName(), new LinkedList<>());
+            if (!usedBy.get(output.getName()).contains(outputName))
+                usedBy.get(output.getName()).add(outputName);
+            visit.add(output.getName());
+            value.append(outputVal);
+        } else {
+            getOutputDependentValue(inputs, value, outName);
+        }
+    }
+
+    private static List<IOutputDescriptor> getOutputsOrderedByNameLength(Collection<IOutputDescriptor> outputs) {
+        List<IOutputDescriptor> orderedOutputs = new LinkedList<>(outputs);
+
+        Comparator<IOutputDescriptor> outputLengthComparator = (i0, i1) -> Integer.compare(i1.getName().length(), i0.getName().length());
+        Collections.sort(orderedOutputs, outputLengthComparator);
+
+        return orderedOutputs;
+    }
+
+    private static void getOutputDependentValue(List<Input> inputs, StringBuilder value, String outName) {
+        List<Input> orderedInputs = orderInputsByNameLength(inputs);
+        for (Input input : orderedInputs) {
+            if (outName.contains(input.getName())) {
+                String outVal = outName.replace(input.getName(), input.getValue().toString());
+                value.append(outVal);
+                return;
+            }
+        }
+    }
+
     private static List<Input> orderInputsByNameLength(List<Input> inputs) {
         LinkedList<Input> orderedInputs = new LinkedList<>(inputs);
         Comparator<Input> inputLengthComparator = (i0, i1) -> Integer.compare(i1.getName().length(), i0.getName().length());
@@ -763,5 +602,83 @@ public class JobFactory {
         Collections.sort(orderedInputs, inputLengthComparator);
         return orderedInputs;
     }
+
+    private static void setUsedBy(List<Output> outputs, Map<String, List<String>> usedBy) {
+        for (Output out : outputs) {
+            if (usedBy.containsKey(out.getName()))
+                out.setUsedBy(usedBy.get(out.getName()));
+        }
+    }
+
+    private static String generateSubJobId(String subId, String stepId) {
+        return stepId + "_" + subId;
+    }
+
+    private static ICombineStrategy getStrategy(ISpreadDescriptor spread) {
+        ICombineStrategyDescriptor strategy = spread.getStrategy();
+        return getCombineStrategy(strategy);
+    }
+
+    private static ICombineStrategy getCombineStrategy(ICombineStrategyDescriptor strategy) {
+
+        IStrategyDescriptor first = strategy.getFirstStrategy();
+        IStrategyDescriptor second = strategy.getSecondStrategy();
+
+        if (first instanceof IInputStrategyDescriptor) {
+            if (second instanceof IInputStrategyDescriptor) {
+                InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) first).getInputName());
+                InputStrategy in1 = new InputStrategy(((IInputStrategyDescriptor) second).getInputName());
+                return new OneToOneStrategy(in, in1);
+            } else {
+                InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) first).getInputName());
+                IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) second);
+                return new OneToManyStrategy(in, strategy1);
+            }
+        } else if (second instanceof IInputStrategyDescriptor) {
+            InputStrategy in = new InputStrategy(((IInputStrategyDescriptor) second).getInputName());
+            IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) first);
+            return new OneToManyStrategy(strategy1, in);
+        } else {
+            IStrategy strategy1 = getCombineStrategy((ICombineStrategyDescriptor) first);
+            IStrategy strategy2 = getCombineStrategy((ICombineStrategyDescriptor) second);
+            return new OneToManyStrategy(strategy1, strategy2);
+        }
+
+    }
+
+    private static Map<String, IPipelinesRepository> getPipelinesRepositories(Collection<IRepositoryDescriptor> repositories,
+                                                                              Map<String, Object> parameters) throws EngineException {
+        Map<String, IPipelinesRepository> pipelinesRepositoryMap = new HashMap<>();
+
+        for (IRepositoryDescriptor repo : repositories) {
+            if(pipelinesRepositoryMap.containsKey(repo.getId()))
+                throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
+            if (repo instanceof IPipelineRepositoryDescriptor) {
+                IPipelineRepositoryDescriptor pRepoDesc = (IPipelineRepositoryDescriptor) repo;
+                IPipelinesRepository pipelinesRepo = RepositoryUtils.getPipelinesRepository(pRepoDesc, parameters);
+                pipelinesRepositoryMap.put(repo.getId(), pipelinesRepo);
+            }
+        }
+
+        return pipelinesRepositoryMap;
+    }
+
+    private static Map<String,IToolsRepository> getToolsRepositories(Collection<IRepositoryDescriptor> repositories,
+                                                                     Map<String, Object> parameters) throws EngineException {
+        Map<String, IToolsRepository> toolsRepositoryMap = new HashMap<>();
+
+        for (IRepositoryDescriptor repo : repositories) {
+            if(toolsRepositoryMap.containsKey(repo.getId()))
+                throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
+            if (repo instanceof IToolRepositoryDescriptor) {
+                IToolRepositoryDescriptor toolsRepoDesc = (IToolRepositoryDescriptor) repo;
+                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
+                toolsRepositoryMap.put(repo.getId(), toolsRepo);
+            }
+        }
+
+        return toolsRepositoryMap;
+    }
+
 
 }

@@ -86,9 +86,9 @@ public class ValidateUtils {
                     + " from pipeline: " + executionId);
     }
 
-    static void validateInput(IStepDescriptor step, ICommandDescriptor commandDescriptor,
-                              IParameterDescriptor parameterDescriptor, IInputDescriptor input,
-                              IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
+    public static void validateInput(IStepDescriptor step, ICommandDescriptor commandDescriptor,
+                                     IParameterDescriptor parameterDescriptor, IInputDescriptor input,
+                                     IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters) throws EngineException {
         validateMandatory(step, commandDescriptor, parameterDescriptor, input, parameters);
         if (input != null)
             validateInputType(step, parameterDescriptor, input, pipelineDescriptor, commandDescriptor, parameters);
