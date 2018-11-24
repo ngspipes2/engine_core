@@ -5,6 +5,7 @@ import pt.isel.ngspipes.engine_core.exception.InputValidationException;
 import java.io.File;
 import java.util.AbstractMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class TypeValidator {
@@ -189,6 +190,11 @@ public class TypeValidator {
         if (value instanceof String) {
             String valueStr = getStringWithoutBrackets((String) value);
             return valueStr.split(",");
+        } else if (value instanceof List) {
+            List values = (List) value;
+            StringBuilder sb = new StringBuilder();
+            values.forEach((val) -> sb.append(val).append(","));
+            return getArray(sb.toString());
         }
         throw new InputValidationException("Value " +  value + " is not a valid string.");
     }
