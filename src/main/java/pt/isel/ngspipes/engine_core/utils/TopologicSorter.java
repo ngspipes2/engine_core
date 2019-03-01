@@ -5,11 +5,8 @@ import pt.isel.ngspipes.engine_core.entities.StateEnum;
 import pt.isel.ngspipes.engine_core.entities.contexts.Input;
 import pt.isel.ngspipes.engine_core.entities.contexts.Job;
 import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
-import pt.isel.ngspipes.engine_core.entities.contexts.Spread;
-import pt.isel.ngspipes.engine_core.exception.EngineException;
 
 import java.util.*;
-import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 public class TopologicSorter {
@@ -28,10 +25,17 @@ public class TopologicSorter {
         return parallelSort(pipeline, roots, chainsFrom);
     }
 
+    public static Collection<ExecutionNode> parallelSort(Pipeline pipeline, List<Job> jobs) {
+        Map<String, Collection<Job>> chainsFrom = getChainFrom(jobs);
+        List<Job> roots = getRoots(jobs);
+        return parallelSort(pipeline, roots, chainsFrom);
+    }
+
     public static Collection<ExecutionNode> sequentialSort(Pipeline pipeline) {
         Collection<Job> jobs = pipeline.getJobs();
         Map<String, Collection<Job>> chainsFrom = getChainFrom(jobs);
         Map<String, Collection<Job>> chainsTo = getChainTo(jobs);
+        Map<String, Collection<Job>> chainsFromCpy = getChainFrom(jobs);
         List<Job> roots = getRoots(jobs);
         List<ExecutionNode> orderedSteps = getSequentialRoots(getRootJobs(roots));
 
@@ -65,7 +69,7 @@ public class TopologicSorter {
     private static Collection<ExecutionNode> parallelSort(Pipeline pipeline, List<Job> roots, Map<String, Collection<Job>> chainsFrom) {
         Collection<Job> jobs = pipeline.getJobs();
         Map<String, Collection<Job>> chainsTo = getChainTo(jobs);
-        Map<String, Collection<Job>> chainsToCpy = getChainTo(jobs);
+        Map<String, Collection<Job>> chainsFromCpy = getChainFrom(jobs);
         Collection<ExecutionNode> graph = getRootJobs(roots);
 
         while(!roots.isEmpty()) {
@@ -75,7 +79,6 @@ public class TopologicSorter {
                 String rootID = root.getId();
                 if (!chainsFrom.containsKey(rootID)) {
                     if (roots.size() == 0) {
-                        addJobParents(graph, chainsToCpy, pipeline);
                         return graph;
                     } else {
                         continue;
@@ -86,31 +89,25 @@ public class TopologicSorter {
                     if (chainsTo.containsKey(job.getId()))
                         chainsTo.get(job.getId()).remove(root);
 
+                    if (job.isInconclusive())
+                        continue;
+
                     if (chainsTo.get(job.getId()).isEmpty()) {
                         roots.add(job);
                     }
 
                     if (job.getSpread() != null){
                         root.setInconclusive(true);
-                        setInconclusive(chainsFrom, rootID, job);
+                        setInconclusive(chainsFrom, rootID);
+                        break;
                     } else {
                         if (root.getSpread() == null)
                             addToGraphIfAbsent(graph, root, job, pipeline);
-                        else {
-                            root.setInconclusive(!root.isInconclusive());
-                            setInconclusive(chainsFrom, job.getId(), job);
-                        }
                     }
                 }
             }
         }
-        addJobParents(graph, chainsTo, pipeline);
         return graph;
-    }
-
-    private static void setInconclusive(Map<String, Collection<Job>> chainsFrom, String rootID, Job job) {
-        job.setInconclusive(true);
-        setInconclusive(chainsFrom, rootID);
     }
 
     private static void setInconclusive(Map<String, Collection<Job>> chainsFrom, String rootID) {
@@ -133,31 +130,17 @@ public class TopologicSorter {
 //            }
 //        }
 
-        if (!chainsFrom.containsKey(job)) {
+        if (!chainsFrom.containsKey(job.getId())) {
             return roots;
         }
 
-        for (Job currJob : chainsFrom.get(job)) {
+        for (Job currJob : chainsFrom.get(job.getId())) {
             if (currJob.isInconclusive()) {
                 currJob.setInconclusive(!currJob.isInconclusive());
                 roots.add(currJob);
             }
         }
 
-        return roots;
-    }
-
-    private static List<ExecutionNode> getChildRoots(Collection<Job> jobs, Map<String, Collection<Job>> chainsFrom) {
-        List<ExecutionNode> roots = new LinkedList<>();
-
-        for (Job job : jobs) {
-            if (!job.getState().getState().equals(StateEnum.SUCCESS)) {
-                roots.add(new ExecutionNode(job));
-                job.setInconclusive(!job.isInconclusive());
-            } else if (chainsFrom.containsKey(job.getId())) {
-                roots.addAll(getChildRoots(chainsFrom.get(job.getId()), chainsFrom));
-            }
-        }
         return roots;
     }
 
@@ -182,37 +165,13 @@ public class TopologicSorter {
         }
     }
 
-    private static void addJobParents(Collection<ExecutionNode> graph, Map<String, Collection<Job>> chainsTo, Pipeline pipeline) {
-        for (ExecutionNode node : graph) {
-            getParents(chainsTo, node, pipeline);
-        }
-    }
-
-    private static void getParents(Map<String, Collection<Job>> chainsTo, ExecutionNode node, Pipeline pipeline) {
-        for (ExecutionNode child : node.getChilds()) {
-            String jobId = child.getJob().getId();
-            if (chainsTo.containsKey(jobId)) {
-                Collection<String> parents = new LinkedList<>();
-                parents.addAll(getParents(chainsTo.get(jobId), pipeline));
-                child.getJob().getParents().addAll(parents);
-                chainsTo.remove(jobId);
-            }
-
-            getParents(chainsTo, child, pipeline);
-        }
-    }
-
-    private static Collection<String> getParents(Collection<Job> stepDescs, Pipeline pipeline) {
-        return stepDescs.stream()
-                .map((s) -> pipeline.getJobById(s.getId()).getId())
-                .collect(Collectors.toList());
-    }
-
     private static void addToGraphIfAbsent(Collection<ExecutionNode> graph, Job root, Job child, Pipeline pipeline) {
         for (ExecutionNode executionNode : graph) {
-            if (executionNode.getJob().equals(root)) {
+            Job job = executionNode.getJob();
+            if (job.equals(root)) {
                 if (notContainsNode(child, executionNode.getChilds())) {
                     executionNode.getChilds().add(new ExecutionNode(child));
+                    child.addParent(job);
                 }
             } else {
                 addToGraphIfAbsent(executionNode.getChilds(), root, child, pipeline);
@@ -239,8 +198,7 @@ public class TopologicSorter {
     private static List<Job> getRoots(Collection<Job> jobs) {
         List<Job> rootJobs = new LinkedList<>();
         for (Job job : jobs) {
-            Collection<Input> chainInputs = getChainInputs(job);
-            if (chainInputs.isEmpty())
+            if (job.getChainsFrom().isEmpty())
                 rootJobs.add(job);
         }
         return rootJobs;
@@ -248,20 +206,8 @@ public class TopologicSorter {
 
     private static Map<String, Collection<Job>> getChainTo(Collection<Job> jobs) {
         Map<String, Collection<Job>> chainTo = new HashMap<>();
-        for (Job jobInside : jobs) {
-            Collection<Input> chainInputs = getChainInputs(jobInside);
-            if (chainInputs.isEmpty())
-                continue;
-
-            for (Job job : jobs) {
-                String jobName = jobInside.getId();
-                if (jobName.equals(job.getId()))
-                    continue;
-                if(isChainStep(job.getId(), chainInputs)) {
-                    chainTo.computeIfAbsent(jobName, k -> new LinkedList<>());
-                    chainTo.get(jobName).add(job);
-                }
-            }
+        for (Job job : jobs) {
+            chainTo.put(job.getId(), new LinkedList<>(job.getChainsFrom()));
         }
         return chainTo;
     }
@@ -269,36 +215,8 @@ public class TopologicSorter {
     private static Map<String, Collection<Job>> getChainFrom(Collection<Job> jobs) {
         Map<String, Collection<Job>> chainFrom = new HashMap<>();
         for (Job job : jobs) {
-            String jobName = job.getId();
-            for (Job jobInside : jobs) {
-                if (jobName.equals(jobInside.getId()))
-                    continue;
-                Collection<Input> chainInputs = getChainInputs(jobInside);
-                if (chainInputs.isEmpty())
-                    continue;
-                if(isChainStep(jobName, chainInputs)) {
-                    chainFrom.computeIfAbsent(jobName, k -> new LinkedList<>());
-                    chainFrom.get(jobName).add(jobInside);
-                }
-            }
-
+            chainFrom.put(job.getId(), new LinkedList<>(job.getChainsTo()));
         }
         return chainFrom;
-    }
-
-    private static boolean isChainStep(String stepName, Collection<Input> chainInputs) {
-        for (Input input : chainInputs) {
-            if(input.getOriginStep() != null && input.getOriginStep().equals(stepName))
-                return true;
-        }
-        return false;
-    }
-
-    private static Collection<Input> getChainInputs(Job job) {
-        Collection<Input> chainInputs = new LinkedList<>();
-        for (Input input : job.getInputs())
-            if (input.getOriginStep() != null && !input.getOriginStep().equals(job.getId()))
-                chainInputs.add(input);
-        return chainInputs;
     }
 }

@@ -60,4 +60,8 @@ public class Input {
     public List<Input> getSubInputs() { return subInputs; }
 
     public void setValue(String value) { this.value = value; }
+    public void setOriginJob(Job originJob) {
+        this.originJob = originJob;
+        this.originStep = originJob.getId();
+    }
 }

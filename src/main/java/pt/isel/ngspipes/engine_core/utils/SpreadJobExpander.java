@@ -4,7 +4,6 @@ import pt.isel.ngspipes.engine_core.entities.Environment;
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.entities.factories.JobFactory;
-import pt.isel.ngspipes.engine_core.entities.factories.PipelineFactory;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
@@ -26,11 +25,14 @@ public class SpreadJobExpander {
     }
 
     public static void expandSpreadJob(Pipeline pipeline, SimpleJob job, Collection<ExecutionNode> graph,
-                                       BiFunction<String, Job, List<String>> getOutValues) throws EngineException {
+                                       BiFunction<String, Job, List<String>> getOutValues, String fileSeparator) throws EngineException {
 
         List<Job> chainsFrom = job.getChainsFrom();
-        List<Job> spreadJobs = getExpandedJobs(pipeline, job, getOutValues);
-        addSpreadNodes(pipeline, job, graph, chainsFrom, spreadJobs);
+        List<Job> toRemove = new LinkedList<>();
+        List<Job> spreadJobs = getExpandedJobs(pipeline, job, toRemove, getOutValues, fileSeparator);
+        pipeline.addJobs(spreadJobs);
+        pipeline.removeJobs(toRemove);
+        addSpreadNodes(pipeline, job, graph, chainsFrom, spreadJobs, fileSeparator);
     }
 
     public static boolean isResourceType(String type) {
@@ -39,17 +41,106 @@ public class SpreadJobExpander {
         return isFile || directory;
     }
 
-    public static List<Job> getExpandedJobs(Pipeline pipeline, SimpleJob job, BiFunction<String, Job, List<String>> getOutValues) throws EngineException {
+    public static List<Job> getExpandedJobs(Pipeline pipeline, SimpleJob job, List<Job> toRemove,
+                                            BiFunction<String, Job, List<String>> getOutValues,
+                                            String fileSeparator) throws EngineException {
         List<Job> spreadJobs = new LinkedList<>();
-        addSpreadJobs(job, spreadJobs, pipeline, getOutValues);
+        addSpreadJobs(job, spreadJobs, pipeline, getOutValues, fileSeparator);
+        List<Job> spreadChildJobs = getSpreadChilds(job, pipeline);
+        toRemove.add(job);
+        toRemove.addAll(spreadChildJobs);
+
+        for (int idx = 0; idx < spreadChildJobs.size(); idx++) {
+            Job spreadChild = spreadChildJobs.get(idx);
+            List<Job> expandedChildJobs = new LinkedList<>();
+            addSpreadJobs(spreadChild, expandedChildJobs, pipeline, SpreadJobExpander::getMiddleOutputValues, fileSeparator);
+            for (int index = 0; index < expandedChildJobs.size(); index++) {
+                updateSpreadInputsChain(expandedChildJobs.get(index), spreadChildJobs.get(idx),job, spreadJobs.get(index));
+            }
+            spreadJobs.addAll(expandedChildJobs);
+        }
         return spreadJobs;
     }
 
+    private static void updateSpreadInputsChain(Job job, Job baseJob, Job parent, Job parentExpanded) {
+        for (String inputToSpread : baseJob.getSpread().getInputs()) {
+            Input input = job.getInputById(inputToSpread);
+            if (input.getOriginJob().equals(parent))
+                input.setOriginJob(parentExpanded);
+        }
+    }
+
+    private static List<String> getMiddleOutputValues(String outputName, Job originJob) {
+        String value = originJob.getOutputById(outputName).getValue().toString();
+        List<String> values = new LinkedList<>();
+        values.add(value);
+        return values;
+    }
+
+    private static List<Job> getSpreadChilds(SimpleJob job, Pipeline pipeline) {
+        List<Job> spreadChilds = new LinkedList<>();
+        for (Job currJob : pipeline.getJobs()) {
+            if (currJob.equals(job))
+                continue;
+            List<Input> chainInputs = getChainInputs(currJob);
+            List<Input> spreadChildInputs = getSpreadChildInputs(chainInputs, job);
+            if (!spreadChildInputs.isEmpty()) {
+                if (!isJoinJob(job, currJob, spreadChildInputs)) {
+                    spreadChilds.add(currJob);
+                } else {
+                    currJob.setInconclusive(true);
+                }
+            }
+        }
+        return spreadChilds;
+    }
+    private static boolean isJoinJob(Job parent, Job job, List<Input> chainInputs) {
+
+        if (job.getSpread() == null) {
+            return true;
+        }
+
+        boolean join = true;
+        for (Input chainInput : chainInputs) {
+            String inType = chainInput.getType();
+            Output output = parent.getOutputById(chainInput.getChainOutput());
+            String outType = output.getType();
+            if (inType.equalsIgnoreCase(outType)) {
+                join = false;
+            } else {
+                return true;
+            }
+        }
+
+        return join;
+    }
+
+    private static List<Input> getSpreadChildInputs(List<Input> chainInputs, SimpleJob job) {
+        List<Input> spreadChildInputs = new LinkedList<>();
+        for (Input chainInput : chainInputs) {
+            if (chainInput.getOriginStep().equals(job.getId()))
+                spreadChildInputs.add(chainInput);
+        }
+        return spreadChildInputs;
+    }
+
+    private static List<Input> getChainInputs(Job job) {
+        List<Input> chainInputs = new LinkedList<>();
+
+        for (Input input: job.getInputs()) {
+            if (!input.getOriginStep().isEmpty() && !input.getOriginStep().equals(job.getId())) {
+                chainInputs.add(input);
+            }
+        }
+
+        return chainInputs;
+    }
+
     public static void addSpreadJobChilds(Pipeline pipeline, Job job, List<Job> chainsFrom,
-                                          List<ExecutionNode> childs, int idx) {
+                                          List<ExecutionNode> childs, int idx, String fileSeparator) {
         for (Job chainJob : chainsFrom) {
             if (chainJob.getSpread() != null) {
-                addSpreadChild(pipeline, job, childs, chainJob, idx);
+                addSpreadChild(pipeline, job, childs, chainJob, idx, fileSeparator);
             } else {
                 chainJob.setInconclusive(!chainJob.isInconclusive());
             }
@@ -57,7 +148,8 @@ public class SpreadJobExpander {
     }
 
     public static void addSpreadJobs(Job job, List<Job> jobs, Pipeline pipeline,
-                                     BiFunction<String, Job, List<String>> getOutValues) throws EngineException {
+                                     BiFunction<String, Job, List<String>> getOutValues,
+                                     String fileSeparator) throws EngineException {
         Spread spread = job.getSpread();
         BiFunction<InOutput, Pipeline, List<String>> values;
 
@@ -71,26 +163,39 @@ public class SpreadJobExpander {
         if (spread.getStrategy() != null)
             SpreadCombiner.getInputsCombination(spread.getStrategy(), valuesOfInputsToSpread);
 
+        spreadByInputs(job, jobs, pipeline, fileSeparator, valuesOfInputsToSpread);
+    }
+
+    private static void spreadByInputs(Job job, List<Job> jobs, Pipeline pipeline, String fileSeparator, Map<String, List<String>> valuesOfInputsToSpread) {
         int idx = 0;
         int len = getInputValuesLength(valuesOfInputsToSpread);
 
         while (idx < len) {
-            Job jobToSpread = getSpreadJob(job, valuesOfInputsToSpread, idx, pipeline);
-            jobToSpread.setParents(job.getParents());
+            Job jobToSpread = getSpreadJob(job, valuesOfInputsToSpread, idx, pipeline, fileSeparator);
             jobs.add(jobToSpread);
             idx++;
         }
     }
 
     public static List<String> getValues(String inputValue) {
+        String suffix = "";
+        int suffixIdx = inputValue.indexOf("]") - 1;
         inputValue = inputValue.replace("[", "");
         inputValue = inputValue.replace("]", "");
+
+        if (suffixIdx != -1) {
+            suffix = inputValue.length() == suffixIdx ? "" : inputValue.substring(suffixIdx);
+        }
 
         String[] split = inputValue.split(",");
         List<String> inputsValues = new LinkedList<>();
 
-        for (String str : split)
-            inputsValues.add(str.trim());
+        for (String str : split) {
+            String value = str.trim();
+            if (!value.contains(suffix))
+                value = value + suffix;
+            inputsValues.add(value);
+        }
 
         return inputsValues;
     }
@@ -140,10 +245,13 @@ public class SpreadJobExpander {
         }
     }
 
-    private static List<Output> getCopyOfJobOutputs(List<Output> outputs, SimpleJob job) {
+    private static List<Output> getCopyOfJobOutputs(List<Output> outputs, SimpleJob job, int idx) {
         List<Output> outs = new LinkedList<>();
         for (Output output : outputs) {
-            Output out = new Output(output.getName(), job, output.getType(), output.getValue());
+//            estou a ignorar que pode vir .* no fim [].*
+            String value = getValues(output.getValue().toString()).get(idx);
+            Output out = new Output(output.getName(), job, output.getType(), value);
+            out.setUsedBy(output.getUsedBy());
             outs.add(out);
         }
         return outs;
@@ -174,12 +282,12 @@ public class SpreadJobExpander {
         return value;
     }
 
-    private static Environment copyEnvironment(Job job, String stepId, String workingDirectory) {
+    private static Environment copyEnvironment(Job job, String stepId, String workingDirectory, String fileSeparator) {
         Environment environment = new Environment();
 
         Environment baseEnvironment = job.getEnvironment();
         if (baseEnvironment == null)
-            baseEnvironment = JobFactory.getJobEnvironment(job.getId(), workingDirectory);
+            baseEnvironment = JobFactory.getJobEnvironment(job.getId(), workingDirectory, fileSeparator);
         environment.setDisk(baseEnvironment.getDisk());
         environment.setMemory(baseEnvironment.getMemory());
         environment.setCpu(baseEnvironment.getCpu());
@@ -214,31 +322,33 @@ public class SpreadJobExpander {
     }
 
     private static boolean isSpreadChain(Job job, Pipeline pipeline) {
-        if (job.getChainsTo().isEmpty())
+        if (job.getChainsFrom().isEmpty())
             return false;
 
         for (Input in : job.getInputs()) {
-            if (in.getOriginStep() != null && !in.getOriginStep().equals(job.getId())) {
-                if (pipeline.getJobById(in.getOriginStep()).getSpread() != null)
+            String originStep = in.getOriginStep();
+            if (originStep != null && !originStep.equals(job.getId())) {
+//                Job chainJob = pipeline.getJobById(originStep);
+//                if (chainJob.getSpread() != null ^ job.getSpread() != null)
                     return true;
             }
         }
         return false;
     }
 
-    private static SimpleJob getSpreadJob(Job job, Map<String, List<String>> inputs, int idx, Pipeline pipeline) {
+    private static SimpleJob getSpreadJob(Job job, Map<String, List<String>> inputs, int idx,
+                                          Pipeline pipeline, String fileSeparator) {
         if (job instanceof SimpleJob) {
             SimpleJob simpleJob = (SimpleJob) job;
             ExecutionContext executionContext = simpleJob.getExecutionContext();
 
             String id = job.getId() + "_" + job.getId() + idx;
-            Environment env = copyEnvironment(job, id, pipeline.getEnvironment().getWorkDirectory());
+            Environment env = copyEnvironment(job, id, pipeline.getEnvironment().getWorkDirectory(), fileSeparator);
             SimpleJob sJob = new SimpleJob(id, env, simpleJob.getCommand(), executionContext);
-            List<Input> jobInputs = getCopyOfJobInputs(job.getInputs(), inputs, idx, simpleJob, pipeline, job.getId());
+            List<Input> jobInputs = getCopyOfJobInputs(job.getInputs(), inputs, idx, sJob, pipeline, job.getId());
             sJob.setInputs(jobInputs);
-            List<Output> jobOutputs = getCopyOfJobOutputs(job.getOutputs(), simpleJob);
+            List<Output> jobOutputs = getCopyOfJobOutputs(job.getOutputs(), simpleJob, idx);
             sJob.setOutputs(jobOutputs);
-            sJob.setParents(job.getParents());
             simpleJob.getChainsFrom().forEach(sJob::addChainsFrom);
             return sJob;
         }
@@ -246,26 +356,20 @@ public class SpreadJobExpander {
         throw new NotImplementedException();
     }
 
-    private static void addSpreadNodes(Pipeline pipeline, SimpleJob job, Collection<ExecutionNode> graph, List<Job> chainsFrom, List<Job> spreadJobs) {
+    private static void addSpreadNodes(Pipeline pipeline, SimpleJob job, Collection<ExecutionNode> graph,
+                                       List<Job> chainsFrom, List<Job> spreadJobs, String fileSeparator) {
         for (int idx = 0; idx < spreadJobs.size(); idx++) {
             Job spreadJob = spreadJobs.get(idx);
             List<ExecutionNode> childs = new LinkedList<>();
-            spreadJob.setParents(job.getChainsFrom().stream().map(Job::getId).collect(Collectors.toList()));
+//            spreadJob.setParents(job.getChainsFrom().stream().map(Job::getId).collect(Collectors.toList()));
             ExecutionNode node = new ExecutionNode(spreadJob, childs);
-            addSpreadJobChilds(pipeline, job, chainsFrom, childs, idx);
+            addSpreadJobChilds(pipeline, job, chainsFrom, childs, idx, fileSeparator);
             graph.add(node);
         }
     }
 
 
-    private static void addSpreadChild(Pipeline pipeline, Job job, List<ExecutionNode> childs, Job chainJob, int idx) {
-        Job childJob = getChildJob(pipeline, job, chainJob, idx);
-        List<ExecutionNode> insideChilds = new LinkedList<>();
-        childs.add(new ExecutionNode(childJob, insideChilds));
-        addSpreadJobChilds(pipeline, chainJob, job.getChainsFrom(), insideChilds, idx);
-    }
-
-    private static Job getChildJob(Pipeline pipeline, Job job, Job chainJob, int idx) {
+    public static Job getChildJob(Pipeline pipeline, Job job, Job chainJob, int idx, String fileSeparator) {
         Collection<String> inputs = chainJob.getSpread().getInputs();
         Map<String, List<String>> ins = new HashMap<>();
         for (String inputName : inputs) {
@@ -281,10 +385,27 @@ public class SpreadJobExpander {
                 ins.get(inputName).addAll(getValues(input.getValue()));
             }
         }
-        Job childJob = getSpreadJob(chainJob, ins, idx, pipeline);
-        childJob.setParents(chainJob.getChainsFrom().stream().map(Job::getId).collect(Collectors.toList()));
-        updateParentToSpreadParent(job, idx, childJob);
+        Job childJob = getSpreadJob(chainJob, ins, idx, pipeline, fileSeparator);
+        updateChains(job, idx, childJob, pipeline);
+        if (!childJob.getParents().isEmpty())
+            updateParentToSpreadParent(job, idx, childJob);
         return childJob;
+    }
+
+    private static void addSpreadChild(Pipeline pipeline, Job job, List<ExecutionNode> childs,
+                                       Job chainJob, int idx, String fileSeparator) {
+        Job childJob = getChildJob(pipeline, job, chainJob, idx, fileSeparator);
+        List<ExecutionNode> insideChilds = new LinkedList<>();
+        childs.add(new ExecutionNode(childJob, insideChilds));
+        addSpreadJobChilds(pipeline, chainJob, job.getChainsFrom(), insideChilds, idx, fileSeparator);
+    }
+
+    private static void updateChains(Job job, int idx, Job childJob, Pipeline pipeline) {
+        if (job.getSpread() != null && childJob.getSpread() != null) {
+            String newChainToId = job.getId() + "_" + job.getId() + idx;
+            childJob.getChainsTo().remove(job);
+            childJob.addChainsTo(pipeline.getJobById(newChainToId));
+        }
     }
 
     private static void updateParentToSpreadParent(Job job, int idx, Job childJob) {
@@ -295,7 +416,6 @@ public class SpreadJobExpander {
                 return parent;
             }
         }).collect(Collectors.toList());
-        childJob.setParents(parentsUpdated);
     }
 
 }

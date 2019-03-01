@@ -6,6 +6,7 @@ import pt.isel.ngspipes.engine_core.entities.contexts.strategy.*;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.utils.DescriptorsUtils;
 import pt.isel.ngspipes.engine_core.utils.RepositoryUtils;
+import pt.isel.ngspipes.engine_core.utils.SpreadJobExpander;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IPipelineRepositoryDescriptor;
@@ -34,35 +35,45 @@ import java.util.stream.Collectors;
 public class JobFactory {
 
     static List<Job> getJobs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
-                                     String workingDirectory) throws EngineException {
+                                     String workingDirectory, String fileSeparator) throws EngineException {
 
         Map<String, IToolsRepository> toolsRepos = getToolsRepositories(pipelineDesc.getRepositories(), parameters);
         Map<String, IPipelinesRepository> pipelinesRepos = getPipelinesRepositories(pipelineDesc.getRepositories(), parameters);
         Map<String, Map.Entry<Job, ICommandDescriptor>> jobsCmdMap = new HashMap<>();
-        addJobs(pipelineDesc, parameters, workingDirectory, toolsRepos, pipelinesRepos, "", jobsCmdMap);
+        addJobs(pipelineDesc, parameters, workingDirectory, toolsRepos, pipelinesRepos, "", jobsCmdMap, fileSeparator);
         setJobsInOut(pipelineDesc, parameters, toolsRepos, pipelinesRepos, jobsCmdMap);
         return jobsCmdMap.values().stream().map(Map.Entry::getKey).collect(Collectors.toList());
     }
 
-    static void expandReadyJobs(List<Job> jobs, Pipeline pipeline) {
+    static void expandReadyJobs(List<Job> jobs, Pipeline pipeline, String fileSeparator) throws EngineException {
         List<Job> toRemove = new LinkedList<>();
+        List<Job> expandedJobs = new LinkedList<>();
         for (Job job : jobs) {
+            SimpleJob sJob = (SimpleJob) job;
+            if (job.isInconclusive())
+                continue;
             if (job.getSpread() != null) {
-                List<Input> chainInputs = getChainInputs(job);
-                if (chainInputs.isEmpty()) { // not chain not dependent
-
-                } else {
-
+                List<Job> parentsSpread = getSpreadInputsParents(pipeline, sJob);
+                if (parentsSpread.isEmpty()) { // not chain not dependent
+                    expandedJobs.addAll(SpreadJobExpander.getExpandedJobs(pipeline, sJob, toRemove, null, fileSeparator));
                 }
+//                else {
+//                    for (Job parent: parentsSpread) {
+//                        if (isListingJob(parent, job)) {
+//                            job.setInconclusive(true);
+//                        } else { // middle spread
+//                            expandReadyJob(pipeline, toRemove, sJob, JobFactory::getMiddleOutputValues, expandedJobs);
+//                        }
+//                    }
+//                }
             }
         }
+        pipeline.addJobs(expandedJobs);
+        pipeline.removeJobs(toRemove);
     }
 
-
-
-    public static Environment getJobEnvironment(String id, String workingDirectory)
-    {
-        String stepWorkDir = workingDirectory + File.separatorChar + id;
+    public static Environment getJobEnvironment(String id, String workingDirectory, String fileSeparator) {
+        String stepWorkDir = workingDirectory + fileSeparator + id;
         Environment environment = new Environment();
 //        environment.setOutputsDirectory(stepWorkDir + File.separatorChar  + "outputs");
         environment.setOutputsDirectory(stepWorkDir);
@@ -72,34 +83,50 @@ public class JobFactory {
 
 
 
-    private static List<Input> getChainInputs(Job job) {
-        List<Input> inputs = new LinkedList<>();
-        for (Input input : job.getInputs()) {
-            if (input.getOriginStep() == null)
-                continue;
-            if (!input.getOriginStep().equals(job.getId()))
-                inputs.add(input);
+    private static List<Job> getSpreadInputsParents(Pipeline pipeline, SimpleJob sJob) {
+        List<Job> parentsSpread = new LinkedList<>();
+        for (String inName : sJob.getSpread().getInputs()) {
+            Input inputById = sJob.getInputById(inName);
+            if (inputById.getOriginJob() == null) {
+                parentsSpread.add(pipeline.getJobById(inputById.getOriginStep()));
+            }
+            if (!inputById.getOriginStep().equals(sJob.getId())) {
+                parentsSpread.add(inputById.getOriginJob());
+            }
         }
+        return parentsSpread;
+    }
 
-        return inputs;
+    private static void updateChains(Pipeline pipeline, Job job, Job old) {
+        String spreadId = old.getId() + "_" + old.getId();
+        String jobId = job.getId();
+        String aux = jobId + "_" + jobId;
+        String idx = jobId.substring(aux.length());
+        if (job.getChainsTo().contains(old)) {
+            job.addChainsTo(pipeline.getJobById(spreadId + idx));
+            job.getChainsTo().remove(old);
+        } else if (job.getChainsFrom().contains(old)) {
+            job.addChainsFrom(pipeline.getJobById(spreadId + idx));
+            job.getChainsFrom().remove(old);
+        }
     }
 
     private static void addJobs(IPipelineDescriptor pipelineDesc, Map<String, Object> parameters,
                                 String workingDirectory, Map<String, IToolsRepository> toolsRepos,
                                 Map<String, IPipelinesRepository> pipesRepos, String subId,
-                                Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap) throws EngineException {
+                                Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, String fileSeparator) throws EngineException {
         for (IStepDescriptor step : pipelineDesc.getSteps()) {
             if (step.getExec() instanceof ICommandExecDescriptor) {
-                addSimpleJob(parameters, workingDirectory, subId, toolsRepos, step, jobCmdMap);
+                addSimpleJob(parameters, workingDirectory, subId, toolsRepos, step, jobCmdMap, fileSeparator);
             } else {
-                addComposeJob(parameters, workingDirectory, step, pipesRepos, subId, jobCmdMap, pipelineDesc);
+                addComposeJob(parameters, workingDirectory, step, pipesRepos, subId, jobCmdMap, pipelineDesc, fileSeparator);
             }
         }
     }
 
     private static void addSimpleJob(Map<String, Object> params, String workingDirectory, String subId,
                                      Map<String, IToolsRepository> toolsRepos, IStepDescriptor step,
-                                     Map<String, Map.Entry<Job, ICommandDescriptor>> jobsCmdMap) throws EngineException {
+                                     Map<String, Map.Entry<Job, ICommandDescriptor>> jobsCmdMap, String fileSeparator) throws EngineException {
         String stepId = step.getId();
         CommandExecDescriptor exec = (CommandExecDescriptor) step.getExec();
         IToolsRepository repo = toolsRepos.get(exec.getRepositoryId());
@@ -112,7 +139,7 @@ public class JobFactory {
         String jobId = stepId;
         if (!subId.isEmpty())
             jobId = generateSubJobId(subId, stepId);
-        Environment environment = getJobEnvironment(jobId, workingDirectory);
+        Environment environment = getJobEnvironment(jobId, workingDirectory, fileSeparator);
         Job job = new SimpleJob(jobId, environment, command, execCtx);
 
         ISpreadDescriptor spread = step.getSpread();
@@ -129,14 +156,14 @@ public class JobFactory {
     private static void addComposeJob(Map<String, Object> params, String workingDirectory, IStepDescriptor step,
                                       Map<String, IPipelinesRepository> pRepos, String subId,
                                       Map<String, Map.Entry<Job, ICommandDescriptor>> jobsCmdMap,
-                                      IPipelineDescriptor pipelineDesc) throws EngineException {
+                                      IPipelineDescriptor pipelineDesc, String fileSeparator) throws EngineException {
         String stepId = step.getId();
         IPipelineDescriptor pipesDescriptor = DescriptorsUtils.getPipelineDescriptor(pRepos, step);
         Collection<IRepositoryDescriptor> repositories = pipesDescriptor.getRepositories();
         Map<String, IToolsRepository> subToolsRepos = getToolsRepositories(repositories, params);
         Map<String, IPipelinesRepository> subPipesRepos = getPipelinesRepositories(repositories, params);
         updateSubPipelineInputs(pipesDescriptor, step);
-        addJobs(pipesDescriptor, params, workingDirectory, subToolsRepos, subPipesRepos, subId + stepId, jobsCmdMap);
+        addJobs(pipesDescriptor, params, workingDirectory, subToolsRepos, subPipesRepos, subId + stepId, jobsCmdMap, fileSeparator);
         updateChainInputsToSubPipeline(pipelineDesc, step, jobsCmdMap, pipesDescriptor);
     }
 
@@ -244,14 +271,22 @@ public class JobFactory {
     private static List<Output> getOutputs(Job job, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
                                            List<Input> inputs) throws EngineException {
         List<Output> outputs = new LinkedList<>();
+        List<Output> outputsToRemove = new LinkedList<>();
         List<String> visitOutputs = new LinkedList<>();
         Map<String, List<String>> usedBy = new HashMap<>();
+        Map<String, IOutputDescriptor> outputsByName = new HashMap<>();
 
         for (IOutputDescriptor output : jobCmdMap.get(job.getId()).getValue().getOutputs()) {
+            outputsByName.put(output.getName(), output);
             addOutput(job, jobCmdMap, inputs, outputs, visitOutputs, usedBy, output);
         }
-
         setUsedBy(outputs, usedBy);
+        visitOutputs = new LinkedList<>();
+        for (IOutputDescriptor output : jobCmdMap.get(job.getId()).getValue().getOutputs()) {
+           setNotRequireOutputs(output, job.getInputs(), usedBy, outputsToRemove, outputs, visitOutputs, outputsByName);
+        }
+
+        outputs.removeAll(outputsToRemove);
 
         return outputs;
     }
@@ -473,7 +508,7 @@ public class JobFactory {
                 }
             } else {
                 String currValue = outputValue.substring(outputValue.indexOf("$") + 1);
-                int idxLast = currValue.indexOf(File.separatorChar);
+                int idxLast = currValue.contains("/") ? currValue.indexOf("/") : currValue.contains("\\") ? currValue.indexOf("\\") : -1;
                 String inName = currValue;
                 if (idxLast != -1)
                     inName = currValue.substring(0, idxLast);
@@ -509,30 +544,85 @@ public class JobFactory {
         if (!visitOutputs.contains(name)) {
             String outputValue = output.getValue();
             String type = output.getType();
-            String value = getOutputValue(inputs, outputs, output.getName(), outputValue, visitOutputs,
-                    jobCmdMap, job, usedBy, type);
+            String value = getOutputValue(inputs, outputs, output.getName(), outputValue, jobCmdMap, job, usedBy, type);
             Output outContext = new Output(output.getName(), job, type, value);
             outputs.add(outContext);
             visitOutputs.add(name);
         }
     }
 
+    private static void setNotRequireOutputs(IOutputDescriptor output, List<Input> inputs, Map<String, List<String>> usedBy,
+                                             List<Output> toRemove, List<Output> outputs, List<String> visitOutputs,
+                                             Map<String, IOutputDescriptor> outputsByName) {
+        String value = output.getValue();
+        if (value.contains("$")) {
+            List<Input> orderdInputs = getOrderInputsByNameLength(inputs);
+            if (value.lastIndexOf("$") == value.indexOf("$")) {
+                String outValue = value.substring(value.indexOf("$") + 1);
+                setNotRequireOutput(output, outputs, usedBy, toRemove, orderdInputs, outValue, visitOutputs, outputsByName);
+            } else {
+                String[] values = value.split("$");
+                for (String outValue : values) {
+                    setNotRequireOutput(output, outputs, usedBy, toRemove, orderdInputs, outValue, visitOutputs, outputsByName);
+                }
+            }
+        }
+        visitOutputs.add(output.getName());
+    }
+
+    private static void setNotRequireOutput(IOutputDescriptor output, List<Output> outputs,
+                                            Map<String, List<String>> usedBy, List<Output> toRemove,
+                                            List<Input> inputs, String outValue, List<String> visitOutputs,
+                                            Map<String, IOutputDescriptor> outputsByName) {
+        if (outValue.contains("/"))
+            outValue = outValue.substring(0, outValue.indexOf("/"));
+        for (String visitOutput : visitOutputs) {
+            if (output.getName().equals(visitOutput))
+                return;
+        }
+
+        if(!isDependentInputDefined(outValue, inputs)) {
+            if (usedBy.isEmpty()) {
+                for (Output out : outputs) {
+                    if (out.getName().equals(output.getName())) {
+                        toRemove.add(out);
+                        return;
+                    }
+                }
+            } else {
+                List<String> keys = new ArrayList<>(usedBy.keySet());
+                keys.sort((i0, i1) -> Integer.compare(i1.length(), i0.length()));
+                keys.stream()
+                    .filter(outValue::contains)
+                    .findFirst()
+                    .ifPresent(s -> setNotRequireOutputs(outputsByName.get(s), inputs, usedBy, toRemove, outputs,
+                                                        visitOutputs, outputsByName));
+            }
+        }
+    }
+
+    private static boolean isDependentInputDefined(String outputValue, List<Input> inputs) {
+        for (Input input : inputs)
+            if (outputValue.equals(input.getName()))
+                return true;
+        return false;
+    }
+
 
     private static String getOutputValue(List<Input> inputs, List<Output> outputs, String outputName,
-                                         String outputValue, List<String> visit,
-                                         Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
+                                         String outputValue, Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap,
                                          Job job, Map<String, List<String>> usedBy, String type) throws EngineException {
         StringBuilder value = new StringBuilder();
         if (outputValue.contains("$")) {
             if (outputValue.indexOf("$") != outputValue.lastIndexOf("$")) {
                 String[] splittedByDependency = outputValue.split("$");
                 for (String val : splittedByDependency) {
-                    dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
+                    dependentOutValue(inputs, outputs, jobCmdMap, job, value, val, usedBy, outputName, type);
                 }
             } else {
                 int idx = outputValue.indexOf("$") + 1;
                 String val = outputValue.substring(idx);
-                dependentOutValue(inputs, outputs, visit, jobCmdMap, job, value, val, usedBy, outputName, type);
+                dependentOutValue(inputs, outputs, jobCmdMap, job, value, val, usedBy, outputName, type);
             }
         } else {
             value.append(outputValue);
@@ -540,9 +630,9 @@ public class JobFactory {
         return value.toString();
     }
 
-    private static void dependentOutValue(List<Input> inputs, List<Output> outputs, List<String> visit,
-                                          Map<String, Map.Entry<Job, ICommandDescriptor>> jobCmdMap, Job job,
-                                          StringBuilder value, String outName, Map<String, List<String>> usedBy,
+    private static void dependentOutValue(List<Input> inputs, List<Output> outputs, Map<String, Map.Entry<Job,
+                                          ICommandDescriptor>> jobCmdMap, Job job, StringBuilder value,
+                                          String outName, Map<String, List<String>> usedBy,
                                           String outputName, String type) throws EngineException {
         int idxLast = outName.indexOf(File.separatorChar);
         String val = outName;
@@ -553,22 +643,20 @@ public class JobFactory {
         List<IOutputDescriptor> orderedOutputs = getOutputsOrderedByNameLength(cmdOutputs);
         IOutputDescriptor output = null;
         for (IOutputDescriptor outputDescriptor : orderedOutputs) {
-            if (val.contains(outputDescriptor.getName())) {
+            if (val.contains(outputDescriptor.getName()) && !outputDescriptor.getName().equalsIgnoreCase(outputName)) {
                 output = outputDescriptor;
                 break;
             }
         }
 
         if (output != null) {
-            String outputVal = getOutputValue(inputs, outputs, output.getName(), output.getValue(), visit, jobCmdMap,
-                    job, usedBy, type);
+            String outputVal = getOutputValue(inputs, outputs, output.getName(), output.getValue(), jobCmdMap, job, usedBy, type);
             outputVal = outName.replace(output.getName(), outputVal);
 
             if (!usedBy.containsKey(output.getName()))
                 usedBy.put(output.getName(), new LinkedList<>());
             if (!usedBy.get(output.getName()).contains(outputName))
                 usedBy.get(output.getName()).add(outputName);
-            visit.add(output.getName());
             value.append(outputVal);
         } else {
             getOutputDependentValue(inputs, value, outName);
@@ -585,17 +673,17 @@ public class JobFactory {
     }
 
     private static void getOutputDependentValue(List<Input> inputs, StringBuilder value, String outName) {
-        List<Input> orderedInputs = orderInputsByNameLength(inputs);
+        List<Input> orderedInputs = getOrderInputsByNameLength(inputs);
         for (Input input : orderedInputs) {
             if (outName.contains(input.getName())) {
-                String outVal = outName.replace(input.getName(), input.getValue().toString());
+                String outVal = outName.replace(input.getName(), input.getValue());
                 value.append(outVal);
                 return;
             }
         }
     }
 
-    private static List<Input> orderInputsByNameLength(List<Input> inputs) {
+    private static List<Input> getOrderInputsByNameLength(List<Input> inputs) {
         LinkedList<Input> orderedInputs = new LinkedList<>(inputs);
         Comparator<Input> inputLengthComparator = (i0, i1) -> Integer.compare(i1.getName().length(), i0.getName().length());
 
@@ -616,7 +704,9 @@ public class JobFactory {
 
     private static ICombineStrategy getStrategy(ISpreadDescriptor spread) {
         ICombineStrategyDescriptor strategy = spread.getStrategy();
-        return getCombineStrategy(strategy);
+        if (strategy != null)
+            return getCombineStrategy(strategy);
+        return null;
     }
 
     private static ICombineStrategy getCombineStrategy(ICombineStrategyDescriptor strategy) {

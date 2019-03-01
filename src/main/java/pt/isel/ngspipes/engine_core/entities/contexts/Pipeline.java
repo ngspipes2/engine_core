@@ -70,6 +70,14 @@ public class Pipeline {
     }
 
     public Job getJobById(String id) { return jobsById.get(id); }
+    public void addJobs(List<Job> jobs) {
+        this.jobs.addAll(jobs);
+        jobs.forEach((job) -> jobsById.put(job.getId(), job));
+    }
+    public void removeJobs(List<Job> jobs) {
+        this.jobs.removeAll(jobs);
+        jobs.forEach((job) -> jobsById.remove(job.getId()));
+    }
     private void initJobsById(List<Job> jobs) {
         jobsById = new HashMap<>();
         for (Job job : jobs)

@@ -1,9 +1,5 @@
 package pt.isel.ngspipes.engine_core.utils;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import pt.isel.ngspipes.engine_core.implementations.ChronosJobStatusDto;
-
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -39,11 +35,14 @@ public class HttpUtils {
     private static void validateSuccesOfRequest(HttpURLConnection conn) throws IOException {
         int responseCode = conn.getResponseCode();
         if(responseCode >= 400 && responseCode < 600)
-            throw new IOException("Error " + responseCode + " - " + readStream(conn.getErrorStream()));
+            throw new IOException("Error " + responseCode + " - " + readStream(conn.getErrorStream()) + " - " + readStream(conn.getInputStream()));
     }
 
 
     private static String readStream(InputStream inputStream) throws IOException{
+        if (inputStream == null)
+            return "";
+
         BufferedReader br = null;
         String line;
         StringBuilder sb = new StringBuilder();

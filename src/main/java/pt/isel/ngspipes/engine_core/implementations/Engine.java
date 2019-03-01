@@ -1,23 +1,28 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import org.apache.log4j.LogManager;
-import org.apache.log4j.Logger;
-import pt.isel.ngspipes.engine_core.entities.*;
-import pt.isel.ngspipes.engine_core.entities.contexts.*;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import pt.isel.ngspipes.engine_core.entities.Arguments;
+import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
+import pt.isel.ngspipes.engine_core.entities.ExecutionState;
+import pt.isel.ngspipes.engine_core.entities.StateEnum;
+import pt.isel.ngspipes.engine_core.entities.contexts.Job;
+import pt.isel.ngspipes.engine_core.entities.contexts.Pipeline;
+import pt.isel.ngspipes.engine_core.entities.contexts.SimpleJob;
 import pt.isel.ngspipes.engine_core.entities.factories.JobFactory;
+import pt.isel.ngspipes.engine_core.entities.factories.PipelineFactory;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
 import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
-import pt.isel.ngspipes.engine_core.entities.factories.PipelineFactory;
+import pt.isel.ngspipes.engine_core.utils.JacksonUtils;
+import pt.isel.ngspipes.engine_core.utils.SpreadJobExpander;
 import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_core.utils.ValidateUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.*;
+import java.util.function.Consumer;
 
 public abstract class Engine implements IEngine {
 
@@ -25,11 +30,14 @@ public abstract class Engine implements IEngine {
     String workingDirectory;
     private final String name;
     final Map<String, Pipeline> pipelines = new HashMap<>();
+    final String fileSeparator;
 
-    Engine(String workingDirectory, String name) {
+    Engine(String workingDirectory, String name, String fileSeparator) {
         this.workingDirectory = workingDirectory;
         this.name = name;
-        logger = LogManager.getLogger(Engine.class.getName());
+        logger = LogManager.getLogger(name);
+
+        this.fileSeparator = fileSeparator;
     }
 
     @Override
@@ -43,19 +51,48 @@ public abstract class Engine implements IEngine {
 
     @Override
     public Pipeline execute(String intermediateRepresentation, Arguments arguments) throws EngineException {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.enable(SerializationFeature.INDENT_OUTPUT);
-        mapper.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        Pipeline pipeline;
         try {
-            Pipeline pipeline = mapper.readValue(intermediateRepresentation, Pipeline.class);
-            pipeline.setEnvironment(JobFactory.getJobEnvironment(pipeline.getName(), workingDirectory));
-            return internalExecute(arguments.parallel, pipeline);
+            pipeline = JacksonUtils.deserialize(intermediateRepresentation, Pipeline.class);
+            pipeline.setEnvironment(JobFactory.getJobEnvironment(pipeline.getName(), workingDirectory, fileSeparator));
         } catch (IOException e) {
+            logger.error("Error loading pipeline from intermediate representation supplied", e);
             throw new EngineException("Error loading pipeline from intermediate representation supplied", e);
         }
+        return internalExecute(arguments.parallel, pipeline);
     }
 
 
+
+    void runInconclusiveDependencies(SimpleJob job, Pipeline pipeline, Consumer<String> wait, String id) {
+        if (job.isInconclusive()) {
+            job.setInconclusive(false);
+            TaskFactory.createAndExecuteTask(() -> {
+                wait.accept(id);
+                Collection<ExecutionNode> graph = TopologicSorter.parallelSort(pipeline, job);
+                try {
+                    for (ExecutionNode node : graph) {
+                        SimpleJob childJob = (SimpleJob) node.getJob();
+                        if (childJob.getSpread() != null) {
+                                SpreadJobExpander.expandSpreadJob(pipeline, childJob, graph, this::getOutputValues, fileSeparator);
+                        }
+                    }
+                    run(pipeline, graph);
+                } catch (EngineException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
+    }
+
+    void updateState(Pipeline pipeline, Job job, EngineException e, StateEnum state) {
+        ExecutionState newState = new ExecutionState(state, e);
+        job.getState().setState(newState.getState());
+        if (e != null)
+            pipeline.setState(newState);
+    }
+
+    protected abstract void configure(Pipeline pipeline) throws EngineException;
     protected abstract void run(Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException;
     protected abstract void copyPipelineInputs(Pipeline pipeline) throws EngineException;
     abstract List<String> getOutputValuesFromJob(String chainOutput, Job originJob);
@@ -71,6 +108,7 @@ public abstract class Engine implements IEngine {
 
     private void stage(Pipeline pipeline) throws EngineException {
         ValidateUtils.validateJobs(pipeline.getJobs());
+        configure(pipeline);
         copyPipelineInputs(pipeline);
         schedulePipeline(pipeline);
         pipeline.getState().setState(StateEnum.SCHEDULE);
@@ -92,8 +130,8 @@ public abstract class Engine implements IEngine {
     private Pipeline createPipeline(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
                                     Arguments arguments, String id) throws EngineException {
         String pipelineWorkingDirectory = getPipelineWorkingDirectory(id);
-        return PipelineFactory.create(id, pipelineDescriptor, parameters,
-        arguments, pipelineWorkingDirectory);
+        return PipelineFactory.create(id, pipelineDescriptor, parameters, arguments,
+                                        pipelineWorkingDirectory, fileSeparator);
     }
 
     private void registerPipeline(Pipeline pipeline) {
@@ -111,9 +149,9 @@ public abstract class Engine implements IEngine {
             try {
                 execute(pipeline, parallel);
             } catch (EngineException e) {
+                logger.error("Error executing pipeline: " + pipeline.getName(), e);
                 ExecutionState executionState = new ExecutionState(StateEnum.FAILED, e);
                 pipeline.setState(executionState);
-                logger.error("Pipeline " + pipeline.getName(), e);
             }
         });
     }
@@ -152,7 +190,7 @@ public abstract class Engine implements IEngine {
     }
 
     private String getPipelineWorkingDirectory(String executionId) {
-        String workDirectory = this.workingDirectory + File.separatorChar + executionId;
+        String workDirectory = this.workingDirectory + fileSeparator + executionId;
         return workDirectory.replace(" ", "");
     }
 

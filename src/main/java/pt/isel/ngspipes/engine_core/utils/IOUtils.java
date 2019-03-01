@@ -1,7 +1,6 @@
 package pt.isel.ngspipes.engine_core.utils;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.*;
 import java.util.LinkedList;
 import java.util.List;
@@ -30,7 +29,6 @@ public class IOUtils {
     }
 
     public static void copyDirectory(String source, String dest) throws IOException {
-
         Path sourcePath = Paths.get(source);
         Path destPath = Paths.get(dest);
         File destFile = new File(destPath.toString());
@@ -57,6 +55,11 @@ public class IOUtils {
         return names;
     }
 
+    public static void findFiles(String basePath, String pattern) throws IOException {
+        List<String> names = getFileNamesByPattern(basePath, pattern);
+        if (names.isEmpty())
+            throw new IOException("Match not found for " + pattern + " on directory " + basePath);
+    }
 
 
     private static void copySimpleFile(String source, String dest) throws IOException {
@@ -83,5 +86,16 @@ public class IOUtils {
                     copySimpleFile(sourcePath + File.separatorChar + name, destPath + File.separatorChar + name);
                 }
             }
+    }
+
+    public static void writeFile(String path, String content) throws IOException {
+        File file = new File(path);
+        if (!file.exists()) {
+            file.getParentFile().mkdirs();
+            file.createNewFile();
+        }
+        try(PrintWriter writer = new PrintWriter(path, "UTF-8")){
+            writer.println(content);
+        }
     }
 }

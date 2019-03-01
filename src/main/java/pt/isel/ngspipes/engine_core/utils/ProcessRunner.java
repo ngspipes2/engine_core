@@ -43,6 +43,29 @@ public class ProcessRunner {
         }
     }
 
+    public static void runOnSpecificFolder(String command, IExecutionProgressReporter reporter, String workDirectory) throws EngineException {
+        ExceptionBox inputBox = new ExceptionBox();
+        ExceptionBox errorBox = new ExceptionBox();
+        Process p;
+
+        try {
+            logger.trace("Executing command: " + command);
+            p = Runtime.getRuntime().exec(command, null, new File(workDirectory));
+
+            Thread inputThread = createThread(() -> logStream(p.getInputStream(), reporter::reportInfo), inputBox);
+            Thread errorThread = createThread(() -> logStream(p.getErrorStream(), reporter::reportInfo), errorBox);
+
+            inputThread.join();
+            errorThread.join();
+        } catch (Exception ex) {
+            try {
+                reporter.reportInfo(ex.getMessage());
+            } catch (ProgressReporterException e) {
+                e.printStackTrace();
+            }
+            throw new EngineException("Error executing command " + command, ex);
+        }
+    }
     public static void run(String command, String workingDirectory, IExecutionProgressReporter reporter) throws EngineException {
         ExceptionBox inputBox = new ExceptionBox();
         ExceptionBox errorBox = new ExceptionBox();

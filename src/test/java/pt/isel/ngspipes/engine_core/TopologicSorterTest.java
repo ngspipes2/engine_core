@@ -18,7 +18,7 @@ public class TopologicSorterTest {
 //            String pipelineDescriptorContent = readContent(path.getPath());
 //            IPipelineDescriptor pipelineDescriptor = parser.getFromString(pipelineDescriptorContent);
 //            Arguments arguments = new Arguments("", true);
-//            Pipeline pipeline = JobFactory.create("abc", pipelineDescriptor, new HashMap<>(), arguments, "");
+//            Pipeline pipeline = PipelineFactory.create("abc", pipelineDescriptor, new HashMap<>(), arguments, "");
 //            List<ExecutionNode> graph = (List<ExecutionNode>) TopologicSorter.parallelSort(pipeline, pipelineDescriptor);
 //            assertTrue(!graph.isEmpty());
 //            assertEquals(2, graph.size());
@@ -43,7 +43,7 @@ public class TopologicSorterTest {
 //            String pipelineDescriptorContent = readContent(path.getPath());
 //            IPipelineDescriptor pipelineDescriptor = parser.getFromString(pipelineDescriptorContent);
 //            Arguments arguments = new Arguments("", false);
-//            Pipeline pipeline = JobFactory.create("abc", pipelineDescriptor, new HashMap<>(), arguments, "");
+//            Pipeline pipeline = PipelineFactory.create("abc", pipelineDescriptor, new HashMap<>(), arguments, "");
 //            List<ExecutionNode> graph = (List<ExecutionNode>) TopologicSorter.sequentialSort(pipeline, pipelineDescriptor);
 //            assertEquals(5, graph.size());
 //            assertEquals("trimmomatic", graph.get(0).getJob().getId());

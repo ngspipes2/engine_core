@@ -22,15 +22,15 @@ import java.util.function.Function;
 public class PipelineFactory {
 
     public static Pipeline create(String executionId, IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                                  Arguments arguments, String workingDirectory) throws EngineException {
+                                  Arguments arguments, String workingDirectory, String fileSeparator) throws EngineException {
 
         PipelineEnvironment environment = getPipelineEnvironment(arguments, workingDirectory);
-        List<Job> jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory());
-        setChains(jobs);
+        List<Job> jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory(), fileSeparator);
         Pipeline pipeline = new Pipeline(jobs, executionId, environment);
-        JobFactory.expandReadyJobs(jobs, pipeline);
         setStepsResources(pipeline, pipelineDescriptor, parameters);
         setOutputs(pipeline, pipelineDescriptor, pipeline.getJobs());
+        JobFactory.expandReadyJobs(jobs, pipeline, fileSeparator);
+        setChains(jobs);
         return pipeline;
     }
 
@@ -167,10 +167,8 @@ public class PipelineFactory {
         Job stepCtx = pipeline.getJobById(stepID);
         if (stepCtx instanceof SimpleJob) {
             IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
-            assert step != null;
             String repositoryId = step.getExec().getRepositoryId();
             IToolRepositoryDescriptor toolRepo = DescriptorsUtils.getToolRepositoryDescriptorById(repositoryId, pipelineDesc.getRepositories());
-            assert toolRepo != null;
             IToolsRepository repo = RepositoryUtils.getToolsRepository(toolRepo, params);
             Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
             return value < stepValue ? value : stepValue;

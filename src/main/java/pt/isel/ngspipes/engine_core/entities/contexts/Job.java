@@ -18,7 +18,7 @@ import java.util.*;
 public abstract class Job {
 
     private String id;
-    private Collection<String> parents;
+    private final Collection<String> parents;
     private List<Input> inputs;
     private List<Output> outputs;
 
@@ -54,7 +54,9 @@ public abstract class Job {
         this.inconclusive = false;
     }
 
-    public Job() {}
+    public Job() {
+        this.parents = new LinkedList<>();
+    }
 
     public void setId(String id) { this.id = id; }
     public String getId() { return id; }
@@ -97,7 +99,7 @@ public abstract class Job {
         if (!parents.contains(parent))
             parents.add(parent.id);
     }
-    public void setParents(Collection<String> parents) { this.parents = parents; }
+//    public void setParents(Collection<String> parents) { this.parents = parents; }
 
     public boolean isInconclusive() { return inconclusive; }
     public void setInconclusive(boolean inconclusive) { this.inconclusive = inconclusive; }

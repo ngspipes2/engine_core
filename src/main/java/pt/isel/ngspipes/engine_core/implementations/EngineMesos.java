@@ -1,15 +1,11 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.SftpException;
-import pt.isel.ngspipes.engine_core.entities.Environment;
-import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
-import pt.isel.ngspipes.engine_core.entities.ExecutionState;
-import pt.isel.ngspipes.engine_core.entities.StateEnum;
+import pt.isel.ngspipes.engine_core.entities.*;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
+import pt.isel.ngspipes.engine_core.entities.factories.ChronosJobStatusFactory;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
@@ -27,53 +23,78 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EngineMesos extends Engine {
 
-
-    private static final String OUT_DIR = "/home/pipes";
+    private static final String OUT_DIR = "/home/calmen";
+//    private static final String OUT_DIR = "/home/pipes";
 //    private static final String OUT_DIR = "/home/centos/pipes";
 //    private static final String  SSH_HOST = "127.0.0.1";
-    private static final String  SSH_HOST = "10.0.2.9";
-//    private static final String  SSH_HOST = "192.92.149.146";
+//    private static final String  SSH_HOST = "10.0.2.9";
+//    private static final String  SSH_HOST = "10.62.73.31";
+//    private static final String  SSH_HOST = "10.141.141.11";
+    private static final String  SSH_HOST = "192.92.149.146";
 //    private static final int  SSH_PORT = 5555;
     private static final int  SSH_PORT = 22;
-    private static final String  SSH_USER = "root";
-//    private static final String  SSH_USER = "centos";
+//    private static final String  SSH_USER = "vagrant";
+//    private static final String  SSH_USER = "calmen";
+//    private static final String  SSH_USER = "root";
+    private static final String  SSH_USER = "centos";
     private static final String  SSH_PASSWORD = "p1p3s2357NGS";
-    private static final String KEY_PATH = "/home/dantas/Desktop/main/privateJava";
-//    private static final String KEY_PATH = "E:\\Work\\NGSPipes\\key\\privateJava";
+//    private static final String  SSH_PASSWORD = "vagrant";
+//    private static final String  SSH_PASSWORD = "ngs##19";
+//    private static final String KEY_PATH = "/home/dantas/Desktop/main/privateJava";
+    private static final String KEY_PATH = "E:\\Work\\NGSPipes\\key\\privateJava";
+//    private static final String KEY_PATH = "E:\\\\Escola\\\\ISEL\\\\MEIC\\\\56_Semestre_Dissertacao\\\\vagrantMesos\\\\.vagrant\\\\machines\\\\\\ngspipes2\\\\virtualbox\\\\private_key";
     private static Collection<String> IGNORE_FILES = new LinkedList<>(Arrays.asList("." , ".."));
     private static final String TAG = "MesosEngine";
 
     private static final String CHRONOS_DEPENDENCY = "dependency";
     private static final String CHRONOS_ISO = "iso8601";
-    private static final String CHRONOS_JOB = "job";
+    private static final String CHRONOS_JOB = "jobs";
+    private static final String CHRONOS_JOB_SEARCH = "jobs/search?name=";
 
-//    private final String chronosEndpoint = "http://192.92.149.146:4400/scheduler/";
-    private final String chronosEndpoint = "http://10.0.2.9:4400/scheduler/";
-//    private final String chronosEndpoint = "http://localhost:5055/scheduler/";
+//    private final String chronosEndpoint = "http://10.62.73.31:4400/scheduler/";
+//    private final String chronosEndpoint = "http://10.141.141.11:4400/scheduler/";
+    private final String chronosEndpoint = "http://192.92.149.146:4400/scheduler/";
+//    private final String chronosEndpoint = "http://10.0.2.9:4400/scheduler/";
+//    private final String chronosEndpoint = "http://localhost:4400/scheduler/";
 //    private final String chronosEndpoint = "http://localhost:5059/scheduler/";
-    private final String BASE_DIRECTORY = "/home/pipes";
-//    private final String BASE_DIRECTORY = "/home/centos/pipes";
+//    private final String chronosEndpoint = "http://localhost:5055/scheduler/";
+//    private final String BASE_DIRECTORY = "/home/pipes";
+//    private final String BASE_DIRECTORY = "/home/calmen";
+//    private final String BASE_DIRECTORY = "/home/vagrant";
+    private final String BASE_DIRECTORY = "/home/centos/pipes";
     private static final String RUN_CMD = "%1$s";
     private static final String WORK_DIRECTORY = System.getProperty("user.home") + File.separatorChar + "NGSPipes" +
             File.separatorChar + "Engine";
+    private static final String epsilon = "P1Y12M12D";
 
 
+    private ChannelSftp channelSftp;
     private final Map<String, Collection<Job>> TASKS_BY_EXEC_ID = new HashMap<>();
 
     private final ConsoleReporter reporter = new ConsoleReporter();
 
 
     EngineMesos(String workingDirectory) {
-        super(workingDirectory, TAG);
+        super(workingDirectory, TAG, "/");
     }
 
-    public EngineMesos() { super(WORK_DIRECTORY, TAG); }
+    public EngineMesos() { super(WORK_DIRECTORY, TAG, "/"); }
 
 
     @Override
+    protected void configure(Pipeline pipeline) throws EngineException { }
+
+    @Override
     public void run(Pipeline pipeline, Collection<ExecutionNode> executionGraph) {
-        TASKS_BY_EXEC_ID.put(pipeline.getName(), pipeline.getJobs());
-        schedule(executionGraph, pipeline);
+        try {
+            List<Job> executionJobs = new LinkedList<>();
+            storeJobs(pipeline, executionJobs);
+            sortByExecutionOrder(executionGraph, pipeline, executionJobs);
+            execute(pipeline, executionJobs);
+        } catch (EngineException e) {
+            ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
+            updatePipelineState(pipeline.getName(), state);
+        }
     }
 
     @Override
@@ -112,27 +133,41 @@ public class EngineMesos extends Engine {
 
     @Override
     public void copyPipelineInputs(Pipeline pipeline) throws EngineException {
-        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " "
-                + pipeline.getName() + " inputs.");
+        logger.trace(TAG + ":: Copying pipeline " + pipeline.getName() + " inputs.");
 
-         updateEnvironment(pipeline.getEnvironment());
+        updateEnvironment(pipeline.getEnvironment());
         ChannelSftp sftp = null;
         try {
             SSHConfig config = getSshConfig();
             sftp = SSHUtils.getChannelSftp(config);
-            SSHUtils.createIfNotExist(pipeline.getEnvironment().getWorkDirectory(), sftp);
+            SSHUtils.createIfNotExist(BASE_DIRECTORY, pipeline.getEnvironment().getWorkDirectory(), sftp, fileSeparator);
         } catch (JSchException | SftpException  e) {
             throw new EngineException("Error connecting server " + SSH_HOST);
         } finally {
             if(sftp != null) {
                 sftp.disconnect();
+                try {
+                    sftp.getSession().disconnect();
+                } catch (JSchException e) {
+                    throw new EngineException("Error copying inputs.", e);
+                }
             }
         }
 
-        for (Job step : pipeline.getJobs()) {
-            updateEnvironment(step.getEnvironment());
-            uploadInputs(step, step.getInputs());
+        for (Job job : pipeline.getJobs()) {
+            updateEnvironment(job.getEnvironment());
+            uploadInputs(pipeline.getName(), job, job.getInputs());
         }
+    }
+
+    @Override
+    public boolean clean(String executionId) throws EngineException {
+        throw new NotImplementedException();
+    }
+
+    @Override
+    public boolean cleanAll() throws EngineException {
+        throw new NotImplementedException();
     }
 
     public static Collection<String> getPipelineOutputs(String pipelineName) throws JSchException {
@@ -160,73 +195,91 @@ public class EngineMesos extends Engine {
         return outputsNames;
     }
 
+
+
     private static SSHConfig getSshConfig() {
-//        return new SSHConfig(SSH_USER, SSH_PASSWORD, KEY_PATH, SSH_HOST, SSH_PORT);
-        return new SSHConfig(SSH_USER, SSH_PASSWORD, SSH_HOST, SSH_PORT);
+        return new SSHConfig(SSH_USER, SSH_PASSWORD, KEY_PATH, SSH_HOST, SSH_PORT);
+//        return new SSHConfig(SSH_USER, SSH_PASSWORD, SSH_HOST, SSH_PORT);
     }
 
+    private void storeJobs(Pipeline pipeline, List<Job> executionJobs) {
+        if (!TASKS_BY_EXEC_ID.containsKey(pipeline.getName()))
+            TASKS_BY_EXEC_ID.put(pipeline.getName(), executionJobs);
+        else
+            TASKS_BY_EXEC_ID.get(pipeline.getName()).addAll(executionJobs);
+    }
 
-
-    private void schedule(Collection<ExecutionNode> executionGraph, Pipeline pipeline) {
-        try {
-            for (ExecutionNode node : executionGraph) {
-                executeBranch(node, pipeline);
+    private void sortByExecutionOrder(Collection<ExecutionNode> executionGraph, Pipeline pipeline, List<Job> executionJobs) {
+        List<Job> pendents = new LinkedList<>();
+        List<Job> parents = new LinkedList<>();
+        Integer totalJobs = 0;
+        executionGraph.forEach((node) -> executionJobs.add(node.getJob()));
+        for (ExecutionNode node : executionGraph) {
+            addByDependency(pipeline, executionJobs, pendents, parents, node, totalJobs);
+        }
+        while (executionJobs.size() < totalJobs) {
+            for (Job pendent : pendents) {
+                int present = (int) parents.stream().filter(executionJobs::contains).count();
+                if (present == parents.size()) {
+                    executionJobs.add(pendent);
+                }
             }
-        } catch (EngineException e) {
-            ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
-            updatePipelineState(pipeline.getName(), state);
         }
     }
 
-    private void executeBranch(ExecutionNode node, Pipeline pipeline) throws EngineException {
-        runTask(node.getJob(), pipeline);
-        scheduleChilds(node.getChilds(), pipeline);
-
-    }
-
-    private void scheduleChilds(List<ExecutionNode> childs, Pipeline pipeline) throws EngineException {
-        for (ExecutionNode child : childs) {
-            runTask(child.getJob(), pipeline);
-            scheduleChilds(child.getChilds(), pipeline);
+    private void addByDependency(Pipeline pipeline, List<Job> executionJobs, List<Job> pendent, List<Job> parents, ExecutionNode node, Integer totalJobs) {
+        for (ExecutionNode child : node.getChilds()) {
+            Job job = child.getJob();
+            job.getParents().forEach((parent) -> parents.add(pipeline.getJobById(parent)));
+            int present = (int) parents.stream().filter(executionJobs::contains).count();
+            if (present == parents.size()) {
+                executionJobs.add(job);
+                totalJobs++;
+                addByDependency(pipeline, executionJobs, pendent, parents, child, totalJobs);
+            } else {
+                pendent.add(job);
+                totalJobs++;
+                addPendents(child.getChilds(), pendent, totalJobs);
+            }
         }
     }
 
+    private void addPendents(List<ExecutionNode> childs, List<Job> pendent, Integer totalJobs) {
+        for (ExecutionNode child : childs ){
+            pendent.add(child.getJob());
+            totalJobs++;
+            addPendents(child.getChilds(), pendent, totalJobs);
+        }
+    }
 
-    private void runTask(Job job, Pipeline pipeline) throws EngineException {
+    private void execute(Pipeline pipeline, List<Job> executionJobs) throws EngineException {
         ValidateUtils.validatePipelineState(pipeline);
-        ValidateUtils.validateResources(job, pipeline);
 
-        if (job instanceof ComposeJob) {
-            throw new NotImplementedException();
-        }
-
-        SimpleJob simpleJob = (SimpleJob) job;
-        if (simpleJob.getSpread() != null) {
-            LinkedList<ExecutionNode> graph = new LinkedList<>();
-            expandSpreadJob(pipeline, simpleJob, graph);
-            run(pipeline, graph);
-        } else {
-            execute(pipeline, simpleJob);
+        for (Job job : executionJobs) {
+            ValidateUtils.validateResources(job, pipeline);
+            SimpleJob sJob = (SimpleJob) job;
+            copyChainInputs(sJob, pipeline);
+            run(sJob, getChronosJob(sJob, pipeline), pipeline);
         }
     }
 
-    private void execute(Pipeline pipeline, SimpleJob job) throws EngineException {
-        copyChainInputs(job, pipeline);
-        run(job, pipeline);
+    private String getChronosJob(SimpleJob job, Pipeline pipeline) throws EngineException {
+        String executeCmd = getExecutionCommand(job, pipeline) + "; ls";
+        return getChronosJob(executeCmd, job, pipeline.getName());
     }
 
-    private void run(SimpleJob job, Pipeline pipeline) throws EngineException {
-        String executeCmd = getExecutionCommand(job, pipeline);
+    private void run(SimpleJob job, String chronosJob, Pipeline pipeline) throws EngineException {
         try {
             reporter.reportInfo("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName());
             IOUtils.createFolder(job.getEnvironment().getOutputsDirectory());
-            String chronosJob = getChronosJob(executeCmd, job, pipeline.getName());
             String url = chronosEndpoint + CHRONOS_ISO;
             if (!job.getParents().isEmpty())
                 url = chronosEndpoint + CHRONOS_DEPENDENCY;
             HttpUtils.post(url, chronosJob);
-//            validateOutputs(job);
+            String jobId = pipeline.getName() + "_" + job.getId();
+            validateOutputs(job, pipeline.getName());
+            runInconclusiveDependencies(job, pipeline, this::waitUntilJobFinish, jobId);
         } catch (IOException e) {
             logger.error("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
@@ -235,62 +288,76 @@ public class EngineMesos extends Engine {
         }
     }
 
-    private String getChronosJob(String executeCmd, SimpleJob job, String executionId) {
-        String jobDir = BASE_DIRECTORY + File.separatorChar + executionId + File.separatorChar + job.getId();
-        String dockerUri = getDockerUri(job.getExecutionContext().getConfig());
-        if (job.getParents().isEmpty())
-            return getChronosJob(executeCmd, job, executionId, jobDir, dockerUri);
-        else
-            return getDependentChronosJob(executeCmd, job, executionId, jobDir, dockerUri);
-    }
-
-    private String getDependentChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir, String dockerUri) {
-        return "{\"parents\":\"" + getParents(job.getParents()) + "\",\"name\": \"" + executionId + "_" + job.getId() + "\"," +
-                " \"container\": {\"type\": \"DOCKER\",\"image\": \"" + dockerUri + "\",\n" +
-                "\"network\": \"HOST\",\"volumes\": [ {\"containerPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
-                " \"hostPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
-                " \"mode\": \"RW\"}]}," +
-                " \"cpus\": \"" + getCpus(job) + "\",\"mem\":\"" + getMemory(job) + "\",\"uris\": []," +
-                "\"shell\": \"true\"," +
-                "\"command\": \"mkdir -p " + jobDir + " && " +
-                "cd " + jobDir + " && " +
-                executeCmd + "\"}";
-    }
-
-    private int getMemory(SimpleJob job) {
-        int memory = job.getEnvironment().getMemory();
-        return memory == 0 ? 2048 : memory;
-    }
-
-    private float getCpus(SimpleJob job) {
-        int cpu = job.getEnvironment().getCpu();
-        return cpu == 0 ? 0.5f : cpu/10;
-    }
-
-    private String getParents(Collection<String> parents) {
-        StringBuilder sb = new StringBuilder("[");
-
-        for (String parent : parents) {
-            sb.append(parent).append(",");
+    private void waitUntilJobFinish(String jobId) {
+        String url = chronosEndpoint + CHRONOS_JOB_SEARCH + jobId;
+        ChronosJobStatusDto chronosJobStatusDto = null;
+        try {
+            do {
+                String content = HttpUtils.get(url);
+                chronosJobStatusDto = ChronosJobStatusFactory.getChronosJobStatusDto(content);
+            } while (chronosJobStatusDto.successCount <= 0);
+        } catch (IOException e) {
+            //TODO:
         }
-
-        sb.deleteCharAt(sb.length() - 1);
-        sb.append("]");
-
-        return sb.toString();
     }
 
-    private String getChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir, String dockerUri) {
-        return "{\"schedule\":\"R1//PT30M\",\"name\": \"" + executionId + "_" + job.getId() + "\"," +
-                " \"container\": {\"type\": \"DOCKER\",\"image\": \"" + dockerUri + "\",\n" +
-                "\"network\": \"HOST\",\"volumes\": [ {\"containerPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
-                " \"hostPath\": \"" + BASE_DIRECTORY + File.separatorChar + "\"," +
-                " \"mode\": \"RW\"}]}," +
-                " \"cpus\": \"" + getCpus(job) + "\",\"mem\": \"" + getMemory(job) + "\",\"uris\": []," +
-                "\"shell\": \"true\"," +
-                "\"command\": \"mkdir -p " + jobDir + " && " +
-                "cd " + jobDir + " && " +
-                executeCmd + "\"}";
+    private String getChronosJob(String executeCmd, SimpleJob job, String executionId) throws EngineException {
+        String jobDir = BASE_DIRECTORY + fileSeparator + executionId + fileSeparator + job.getId();
+        try {
+            if (job.getParents().isEmpty())
+                return getChronosJob(executeCmd, job, executionId, jobDir);
+            else
+                return getDependentChronosJob(executeCmd, job, executionId, jobDir);
+        } catch (IOException ex) {
+            throw new EngineException("Error creating chronos job.", ex);
+        }
+    }
+
+    private String getDependentChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir) throws EngineException, IOException {
+        String command = "mkdir -p " + jobDir + " && " + "cd " + jobDir + " && " + executeCmd;
+        String name = executionId + "_" + job.getId();
+        List<String> parents = getParents(job, executionId);
+        if (job.getExecutionContext().getContext().equalsIgnoreCase("DOCKER")) {
+            Container container = getContainerInfo(job);
+            DockerChronosJob dockerChronosJob = new DockerChronosJob(parents, epsilon, getCpus(job), command, name, getMemory(job), container);
+            return JacksonUtils.serialize(dockerChronosJob);
+        } else  {
+            ChronosJob chronosJob = new ChronosJob(parents, epsilon, getCpus(job), command, name, getMemory(job));
+            return JacksonUtils.serialize(chronosJob);
+        }
+    }
+
+    private String getDependentChronosJob(String executeCmd, String parent, String id) throws IOException {
+        String epsilon = "P1Y12M12D";
+        String shell = "true";
+        List<String> parents = new LinkedList<>();
+        parents.add(parent);
+        String name = id + "_" + parent;
+        ChronosJob chronosJob = new ChronosJob(parents, epsilon, "0.5f", shell, executeCmd, name, "512");
+        return JacksonUtils.serialize(chronosJob);
+    }
+
+    private String getChronosJob(String executeCmd, SimpleJob job, String executionId, String jobDir) throws EngineException, IOException {
+        String schedule = "R1//P1Y";
+        String command = "cd " + jobDir + " && ls && " + executeCmd;
+        String name = executionId + "_" + job.getId();
+        if (job.getExecutionContext().getContext().equalsIgnoreCase("DOCKER")) {
+            Container container = getContainerInfo(job);
+            DockerChronosJob dockerChronosJob = new DockerChronosJob(schedule, epsilon, getCpus(job), command, name, getMemory(job), container);
+            return JacksonUtils.serialize(dockerChronosJob);
+        } else  {
+            ChronosJob chronosJob = new ChronosJob(schedule, epsilon, getCpus(job), command, name, getMemory(job));
+            return JacksonUtils.serialize(chronosJob);
+        }
+    }
+
+    private Container getContainerInfo(SimpleJob job) {
+        List<Volume > volumes = new LinkedList<>();
+        String paths = BASE_DIRECTORY + fileSeparator;
+        Volume volume = new Volume(paths, paths);
+        volumes.add(volume);
+        String image = getDockerUri(job.getExecutionContext().getConfig());
+        return new Container(image, volumes);
     }
 
     private String getDockerUri(Map<String, Object> config) {
@@ -301,10 +368,32 @@ public class EngineMesos extends Engine {
         return dockerUri;
     }
 
+    private String getMemory(SimpleJob job) {
+        int memory = job.getEnvironment().getMemory();
+        int mem = memory == 0 ? 2048 : memory;
+        return mem + "";
+    }
+
+    private String getCpus(SimpleJob job) {
+        int cpu = job.getEnvironment().getCpu();
+        float value = cpu == 0 ? 0.5f : cpu / 10;
+        return value + "";
+    }
+
+    private List<String> getParents(SimpleJob job, String pipelineName) throws EngineException {
+        String uri = chronosEndpoint + CHRONOS_JOB + "/search?name=" + pipelineName + job.getId();
+        try {
+            String parentJobsName = HttpUtils.get(uri);
+            return JacksonUtils.readPropertyValues(parentJobsName, "name");
+        } catch (IOException e) {
+            throw new EngineException("Error getting parent dependency", e);
+        }
+    }
+
     private String  getExecutionCommand(SimpleJob job, Pipeline pipeline) throws EngineException {
         try {
-            String command = CommandBuilderSupplier.getCommandBuilder("Local").build(pipeline, job);
-//            String command = job.getCommandBuilder().build(pipeline, job.getId());
+            String command = CommandBuilderSupplier.getCommandBuilder("Local").build(pipeline, job, fileSeparator, job.getExecutionContext().getConfig());
+//            String command = job.getCommandBuilder().build(pipeline, job);
             return String.format(RUN_CMD, command);
         } catch (CommandBuilderException e) {
             logger.error(TAG + ":: Error when building step - " + job.getId(), e);
@@ -312,55 +401,42 @@ public class EngineMesos extends Engine {
         }
     }
 
+    private void copyChainInputs(SimpleJob job, Pipeline pipeline) throws EngineException {
+        String destDir = job.getEnvironment().getWorkDirectory() + fileSeparator;
 
-    public static boolean isJobSuccess(String url, String jobName) {
-        url = url + "jobs/search?name=" + jobName;
-        try {
-            String content = HttpUtils.get(url);
-            System.out.println("Getting status for: " + jobName);
-            ChronosJobStatusDto chronosJobStatusDto = getChronosJobStatusDto(content);
-            return chronosJobStatusDto.successCount > 0;
-        } catch (IOException e) {
-            System.out.println(e.getMessage());
-        }
-        return false;
-    }
-
-    private static ChronosJobStatusDto getChronosJobStatusDto(String content) throws IOException {
-        return getObjectMapper(new JsonFactory()).readValue(content, ChronosJobStatusDto[].class)[0];
-    }
-
-    private static ObjectMapper getObjectMapper(JsonFactory factory) {
-        return new ObjectMapper(factory);
-    }
-
-    private void copyChainInputs(SimpleJob stepCtx, Pipeline pipeline) throws EngineException {
-
-        String destDir = stepCtx.getEnvironment().getWorkDirectory() + File.separatorChar;
-
-        for (Input inputCtx : stepCtx.getInputs()) {
-            if (!inputCtx.getOriginStep().equals(stepCtx.getId())) {
+        for (Input inputCtx : job.getInputs()) {
+            if (!inputCtx.getOriginStep().equals(job.getId())) {
                 Job chainStep = pipeline.getJobById(inputCtx.getOriginStep());
-                String outDir = chainStep.getEnvironment().getOutputsDirectory() + File.separatorChar;
+                String outDir = chainStep.getEnvironment().getOutputsDirectory() + fileSeparator;
                 Output outCtx = chainStep.getOutputById(inputCtx.getChainOutput());
                 List<String> usedBy = outCtx.getUsedBy();
+                String jobName = pipeline.getName() + job.getId() + "_cp_outputs" + chainStep.getId();
 
-                SSHConfig config = getSshConfig();
-                try {
-                    if (usedBy != null) {
-                        for (String dependent : usedBy) {
-                            Output outputCtx = chainStep.getOutputById(dependent);
-                            String value = outputCtx.getValue().toString();
-                            SSHUtils.copy(outDir, destDir, value, config);
-                        }
-                    } else {
-                        String value = outCtx.getValue().toString();
-                        SSHUtils.copy(outDir, destDir, value, config);
+                if (usedBy != null) {
+                    for (String dependent : usedBy) {
+                        Output outputCtx = chainStep.getOutputById(dependent);
+                        String value = outputCtx.getValue().toString();
+                        copyInput(pipeline.getName() + "_" + chainStep.getId(), jobName + dependent, destDir, outDir, value);
                     }
-                } catch (JSchException | InterruptedException | SftpException e) {
-                    e.printStackTrace();
+                } else {
+                    String value = outCtx.getValue().toString();
+                    copyInput(pipeline.getName() + "_" + chainStep.getId(), jobName + outCtx.getName(), destDir, outDir, value);
                 }
             }
+        }
+    }
+
+    private void copyInput(String parent, String id, String destDir, String outDir, String value) throws EngineException {
+        String createDestDir = "mkdir -p " + destDir;
+        String copyInputs = " && cp -R " + outDir + value + " " + destDir;
+        String changePermissions = " && chmod -R 777 " + destDir;
+        parent = "validateOutputs_" + parent;
+        try {
+            String copyTask = getDependentChronosJob(createDestDir + copyInputs + changePermissions, parent, id);
+            HttpUtils.post(chronosEndpoint + CHRONOS_DEPENDENCY, copyTask);
+        } catch (IOException e) {
+            logger.error("Error copying input: " + value , e);
+            throw new EngineException("Error copying input: " + value , e);
         }
     }
 
@@ -374,103 +450,62 @@ public class EngineMesos extends Engine {
         environment.setOutputsDirectory(environment.getOutputsDirectory().replace(localWorkDir, BASE_DIRECTORY));
     }
 
-    private void uploadInputs(Job step, List<Input> inputs) throws EngineException {
+    private void uploadInputs(String pipelineName, Job step, List<Input> inputs) throws EngineException {
         for (Input input : inputs) {
-            uploadInput(step, input);
-            uploadInputs(step, input.getSubInputs());
+            uploadInput(pipelineName, step, input);
+            uploadInputs(pipelineName, step, input.getSubInputs());
         }
     }
 
-    private void uploadInput(Job step, Input input) throws EngineException {
+    private void uploadInput(String pipelineName, Job step, Input input) throws EngineException {
         if (input.getType().equalsIgnoreCase("file") || input.getType().equalsIgnoreCase("directory")) {
             if (input.getChainOutput() == null || input.getChainOutput().isEmpty()) {
-                uploadInput(input.getValue(), step);
+                uploadInput(pipelineName, input, step);
             }
         }
     }
 
-    private void uploadInput(String input, Job stepCtx) throws EngineException {
-        String inputName = input.substring(input.lastIndexOf(File.separatorChar) + 1);
-        String destInput = stepCtx.getEnvironment().getWorkDirectory() + File.separatorChar;
+    private void uploadInput(String pipelineName, Input input, Job stepCtx) throws EngineException {
+        String value = input.getValue();
+        String inputName = value.substring(value.lastIndexOf(fileSeparator) + 1);
+        String destInput = stepCtx.getEnvironment().getWorkDirectory() + fileSeparator;
         try {
             SSHConfig config = getSshConfig();
-            ChannelSftp channelSftp = SSHUtils.getChannelSftp(config);
-            SSHUtils.upload(destInput, input, channelSftp);
+            if (channelSftp == null)
+                channelSftp = SSHUtils.getChannelSftp(config);
+            String pipeline_dir = BASE_DIRECTORY + fileSeparator + pipelineName;
+            SSHUtils.upload(pipeline_dir, destInput, value, channelSftp, fileSeparator);
+            input.setValue(pipeline_dir + fileSeparator + value.substring(value.lastIndexOf(File.separatorChar) + 1));
         } catch (JSchException | UnsupportedEncodingException | FileNotFoundException | SftpException e) {
-            throw new EngineException("Error copying input file " + inputName);
+            throw new EngineException("Error copying input file " + inputName, e);
         }
     }
 
-    private void validateOutputs(SimpleJob stepCtx) throws EngineException {
-        try {
-            Collection<String> outputs = getStepOutputs(stepCtx.getEnvironment().getOutputsDirectory());
+    private void validateOutputs(SimpleJob stepCtx, String executionId) throws EngineException {
+        StringBuilder chronosJobCmd = new StringBuilder();
+        String outputDir = stepCtx.getEnvironment().getOutputsDirectory();
 
-            for (Output outCtx : stepCtx.getOutputs()) {
-                String type = outCtx.getType();
-                if (type.equalsIgnoreCase("file") || type.equalsIgnoreCase("directory")) {
-                    String out = outCtx.getValue() + "";
-                    String output = getOutput(outputs, out);
-                    if (output.isEmpty())
-                        throw new EngineException("Output " + outCtx.getName() +
-                                " not found. Error running job " + stepCtx.getId());
-                }
-            }
-        } catch (JSchException | SftpException e) {
-            throw new EngineException("Error getting job " + stepCtx.getId() + " outputs", e);
-        }
-    }
-
-    private String getOutput(Collection<String> outputs, String out) {
-        String output = "";
-
-        for (String outName : outputs) {
-            if (outName.contains(out)) {
-                output = outName;
-            }
-        }
-        return output;
-    }
-
-    private Collection<String> getStepOutputs(String path) throws SftpException, JSchException {
-        LinkedList<String> outputsNames = new LinkedList<>();
-        ChannelSftp channelSftp = null;
-
-        try {
-            SSHConfig config = getSshConfig();
-            channelSftp = SSHUtils.getChannelSftp(config);
-            outputsNames.addAll(getStepOutputs(path, "", channelSftp));
-        } finally {
-            if(channelSftp != null) {
-                channelSftp.disconnect();
-            }
-        }
-
-        return outputsNames;
-    }
-
-    private Collection<? extends String> getStepOutputs(String path, String parentEntry, ChannelSftp channelSftp) throws SftpException {
-        List<String> outputsNames = new LinkedList<>();
-
-        channelSftp.cd(path);
-        Vector fileList = channelSftp.ls(path);
-        for(int i=0; i< fileList.size(); i++) {
-            ChannelSftp.LsEntry entry = (ChannelSftp.LsEntry) fileList.get(i);
-
-            String filename = entry.getFilename();
-            if (!IGNORE_FILES.contains(filename)) {
-                if (entry.getAttrs().isDir()) {
-                    String pathDir = path + File.separatorChar + filename;
-                    outputsNames.addAll(getStepOutputs(pathDir, filename, channelSftp));
-                } else {
-                    if (parentEntry.isEmpty())
-                        outputsNames.add(filename);
-                    else
-                        outputsNames.add(parentEntry + File.separatorChar + filename);
+        for (Output outCtx : stepCtx.getOutputs()) {
+            String type = outCtx.getType();
+            if (type.contains("ile") || type.contains("irectory")) {
+                String out = outCtx.getValue() + "";
+                if(!out.isEmpty()) {
+                    if (chronosJobCmd.length() != 0)
+                        chronosJobCmd.append(" && ");
+                    chronosJobCmd.append("find ")
+                                .append(outputDir + fileSeparator + out);
                 }
             }
         }
-
-        return outputsNames;
+        try {
+            String parent = executionId + "_" + stepCtx.getId();
+            String id = "validateOutputs";
+            String chronosJob = getDependentChronosJob(chronosJobCmd.toString(), parent, id);
+            HttpUtils.post(chronosEndpoint + CHRONOS_DEPENDENCY, chronosJob);
+        } catch (IOException e) {
+            logger.error("Error step: " + stepCtx.getId() + " didn't produces all outputs." , e);
+            throw new EngineException("Error step: " + stepCtx.getId() + " didn't produces all outputs." , e);
+        }
     }
 
 }

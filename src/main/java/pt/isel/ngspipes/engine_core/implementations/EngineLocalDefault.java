@@ -16,7 +16,6 @@ import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class EngineLocalDefault extends Engine {
 
@@ -30,10 +29,13 @@ public class EngineLocalDefault extends Engine {
 
 
     public EngineLocalDefault(String workingDirectory) {
-        super(workingDirectory, TAG);
+        super(workingDirectory, TAG, File.separatorChar + "");
     }
 
-    public EngineLocalDefault() { super(WORK_DIRECTORY, TAG); }
+    public EngineLocalDefault() { super(WORK_DIRECTORY, TAG, File.separatorChar + ""); }
+
+    @Override
+    protected void configure(Pipeline pipeline) throws EngineException { }
 
     @Override
     public void run(Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException {
@@ -42,7 +44,7 @@ public class EngineLocalDefault extends Engine {
             pipeline.getState().setState(StateEnum.RUNNING);
         }
         Map<Job, BasicTask<Void>> taskMap = getTasks(graph, pipeline, new HashMap<>());
-//        scheduleFinishPipelineTask(pipeline, taskMap);
+        scheduleFinishPipelineTask(pipeline, taskMap);
         scheduleChildTasks(pipeline, taskMap);
         scheduleParentsTasks(graph, pipeline.getName(), taskMap);
     }
@@ -78,7 +80,7 @@ public class EngineLocalDefault extends Engine {
         int beginIdx = spreadId.lastIndexOf(originJob.getId()) + originJob.getId().length();
         int idx = Integer.parseInt(spreadId.substring(beginIdx));
         String pattern = SpreadJobExpander.getValues(patterns).get(idx) + appendAtEnd;
-        List<String> fileNamesByPattern = IOUtils.getFileNamesByPattern(outputsDirectory + File.separatorChar + spreadId, pattern);
+        List<String> fileNamesByPattern = IOUtils.getFileNamesByPattern(outputsDirectory + fileSeparator + spreadId, pattern);
         return new LinkedList<>(fileNamesByPattern);
     }
 
@@ -96,6 +98,16 @@ public class EngineLocalDefault extends Engine {
             }
         }
         return stopped;
+    }
+
+    @Override
+    public boolean clean(String executionId) throws EngineException {
+        throw new NotImplementedException();
+    }
+
+    @Override
+    public boolean cleanAll() throws EngineException {
+        throw new NotImplementedException();
     }
 
 
@@ -148,7 +160,6 @@ public class EngineLocalDefault extends Engine {
     }
 
     private Map<Job, BasicTask<Void>> getTasks(Collection<ExecutionNode> executionGraph, Pipeline pipeline, Map<Job, BasicTask<Void>> tasks) {
-
         for (ExecutionNode node : executionGraph) {
             Job job = node.getJob();
             BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
@@ -178,21 +189,26 @@ public class EngineLocalDefault extends Engine {
         if (type.equalsIgnoreCase("file") || type.equalsIgnoreCase("directory") || type.equalsIgnoreCase("file[]")) {
             if (input.getChainOutput() == null || input.getChainOutput().isEmpty()) {
                 String value = input.getValue();
-                if (type.contains("[]") || job.getSpread() != null) {
-                    value = value.replace("[", "");
-                    value = value.replace("]", "");
-                    value = value.replace(" ", "");
-                    String[] values = value.split(",");
-                    for (String val : values)
-                        copyInput(val, job);
-                } else
-                    copyInput(value, job);
+                if (type.equalsIgnoreCase("directory")) {
+                    IOUtils.createFolder(job.getEnvironment().getWorkDirectory() + File.separatorChar + value);
+                } else {
+                    if (type.contains("[]") || job.getSpread() != null) {
+                        value = value.replace("[", "");
+                        value = value.replace("]", "");
+                        value = value.replace(" ", "");
+                        String[] values = value.split(",");
+                        for (String val : values)
+                            copyInput(val, job);
+                    } else
+                        copyInput(value, job);
+
+                }
             }
         }
     }
 
     private void copyInput(String input, Job stepCtx) throws EngineException {
-        String inputName = input.substring(input.lastIndexOf(File.separatorChar));
+        String inputName = input.substring(input.lastIndexOf(fileSeparator));
         String destInput = stepCtx.getEnvironment().getWorkDirectory() + inputName;
         try {
             IOUtils.copyFile(input, destInput);
@@ -227,13 +243,6 @@ public class EngineLocalDefault extends Engine {
         }
     }
 
-    private void updateState(Pipeline pipeline, Job job, EngineException e, StateEnum state) {
-        ExecutionState newState = new ExecutionState(state, e);
-        job.getState().setState(newState.getState());
-        if (e != null)
-            pipeline.setState(newState);
-    }
-
     private void runTask(Job job, Pipeline pipeline) throws EngineException {
         ValidateUtils.validatePipelineState(pipeline);
         ValidateUtils.validateResources(job, pipeline);
@@ -246,28 +255,52 @@ public class EngineLocalDefault extends Engine {
         SimpleJob simpleJob = (SimpleJob) job;
         if (simpleJob.getSpread() != null) {
             LinkedList<ExecutionNode> graph = new LinkedList<>();
-            SpreadJobExpander.expandSpreadJob(pipeline, simpleJob, graph, this::getOutputValues);
+            SpreadJobExpander.expandSpreadJob(pipeline, simpleJob, graph, this::getOutputValues, fileSeparator);
             run(pipeline, graph);
-            /*
+/*
             List<Job> expandedJobs = new LinkedList<>();
             getExpandedJobs(graph, expandedJobs);
             List<Task<Void>> childs = expandedJobs.stream().map((expendedJob) ->
-                TASKS_BY_EXEC_ID.get(pipeline.getName()).get(expendedJob)
+                    TASKS_BY_EXEC_ID.get(pipeline.getName()).get(expendedJob)
             ).collect(Collectors.toList());
 
             try {
                 TaskFactory.whenAllTasks(childs).finishedEvent.await();
             } catch (InterruptedException e) {
                 throw new EngineException("Error waiting for dependent jobs", e);
-            }*/
+            }
+*/
+
         } else {
             execute(pipeline, simpleJob);
         }
-        updateState(pipeline, job, null, StateEnum.SUCCESS);
+
         if (job.isInconclusive()) {
-            Collection<ExecutionNode> childGraph = TopologicSorter.parallelSort(pipeline, job);
+            job.setInconclusive(false);;
+            List<Job> childJobs = new LinkedList<>();
+            for (Job childJob : job.getChainsTo()) {
+                if (childJob.getSpread() != null) {
+                    childJobs.addAll(SpreadJobExpander.getExpandedJobs(pipeline, (SimpleJob) childJob, new LinkedList<>(), this::getOutputValues, fileSeparator));
+                } else {
+                    childJobs.add(childJob);
+                }
+            }
+            Collection<ExecutionNode> childGraph = TopologicSorter.parallelSort(pipeline, childJobs);
             run(pipeline, childGraph);
+
+//            getExpandedJobs(childGraph, childJobs);
+//            List<Task<Void>> childs = childJobs.stream().map((expendedJob) ->
+//                    TASKS_BY_EXEC_ID.get(pipeline.getName()).get(expendedJob)
+//            ).collect(Collectors.toList());
+//
+//            try {
+//                TaskFactory.whenAllTasks(childs).finishedEvent.await();
+//            } catch (InterruptedException e) {
+//                throw new EngineException("Error waiting for dependent jobs", e);
+//            }
         }
+
+        updateState(pipeline, job, null, StateEnum.SUCCESS);
     }
 
     private void getExpandedJobs(List<ExecutionNode> graph, List<Job> expandedJobs) {
@@ -293,7 +326,7 @@ public class EngineLocalDefault extends Engine {
         } catch (EngineException e) {
             logger.error("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
-            updateState(pipeline, job, e, StateEnum.SUCCESS);
+            updateState(pipeline, job, e, StateEnum.FAILED);
             throw new EngineException("Error executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
         }
@@ -302,8 +335,8 @@ public class EngineLocalDefault extends Engine {
     private void validateOutputs(SimpleJob stepCtx) throws EngineException {
         for (Output outCtx : stepCtx.getOutputs()) {
             String type = outCtx.getType();
-            if (type.equalsIgnoreCase("file") || type.equalsIgnoreCase("directory")) {
-                String out = stepCtx.getEnvironment().getOutputsDirectory() + File.separatorChar + outCtx.getValue();
+            if (type.contains("ile") || type.contains("irectory")) {
+                String out = stepCtx.getEnvironment().getOutputsDirectory() + fileSeparator + outCtx.getValue();
                 try {
                     IOUtils.verifyFile(out);
                 } catch (IOException e) {
@@ -316,7 +349,7 @@ public class EngineLocalDefault extends Engine {
 
     private String  getExecutionCommand(SimpleJob job, Pipeline pipeline) throws EngineException {
         try {
-            String command = job.getCommandBuilder().build(pipeline, job);
+            String command = job.getCommandBuilder().build(pipeline, job, fileSeparator, job.getExecutionContext().getConfig());
             return String.format(RUN_CMD, command);
         } catch (CommandBuilderException e) {
             logger.error(TAG + ":: Error when building step - " + job.getId(), e);
@@ -326,47 +359,47 @@ public class EngineLocalDefault extends Engine {
 
     private void copyChainInputs(SimpleJob job, Pipeline pipeline) throws EngineException {
 
-        String destDir = job.getEnvironment().getWorkDirectory() + File.separatorChar;
+        String destDir = job.getEnvironment().getWorkDirectory() + fileSeparator;
 
         for (Input input : job.getInputs()) {
             String originStep = input.getOriginStep();
             if (!originStep.equals(job.getId())) {
-                String spreadId = originStep + "_" + originStep;
                 String type = input.getType();
-                if (job.getId().startsWith(spreadId)) {
+                if (job.getId().startsWith(originStep)) {
                     if (SpreadJobExpander.isResourceType(type))
                         copySpreadInput(destDir, input, job.getId());
                 } else {
-                    Job chainJob = pipeline.getJobById(originStep);
-
-                    String outDir = chainJob.getEnvironment().getOutputsDirectory() + File.separatorChar;
-                    Output outCtx = chainJob.getOutputById(input.getChainOutput());
-                    List<String> usedBy = outCtx.getUsedBy();
-
-                    if (chainJob.getSpread() != null && job.getSpread() == null) {
-                        if (!usedBy.isEmpty())
-                            outCtx = chainJob.getOutputById(usedBy.get(0));
-
-                        int beginIdx = spreadId.lastIndexOf(job.getId()) + job.getId().length();
-                        int idx = Integer.parseInt(job.getId().substring(beginIdx));
-                        String spreadJobId = spreadId + idx;
-                        List<String> outputValuesFromSpreadJob = getOutputValuesFromSpreadJob(outCtx.getName(), chainJob, spreadJobId);
-                        outDir = outDir + spreadJobId + File.separatorChar;
-                        for (String value : outputValuesFromSpreadJob) {
-                            copyChainInput(outDir, destDir, outCtx, value);
-                        }
-                    } else { // OTHER CASES
-                        copyFromSingleJob(destDir, chainJob, outDir, outCtx, usedBy);
-                    }
+                    copyChainInput(job, pipeline, destDir, input, originStep);
                 }
             }
+        }
+    }
+
+    private void copyChainInput(SimpleJob job, Pipeline pipeline, String destDir, Input input, String originStep) throws EngineException {
+        Job chainJob = pipeline.getJobById(originStep);
+
+        String outDir = chainJob.getEnvironment().getOutputsDirectory() + fileSeparator;
+        Output outCtx = chainJob.getOutputById(input.getChainOutput());
+        List<String> usedBy = outCtx.getUsedBy();
+
+        if (chainJob.getSpread() != null && job.getSpread() == null) {
+            if (!usedBy.isEmpty())
+                outCtx = chainJob.getOutputById(usedBy.get(0));
+
+            List<String> outputValuesFromSpreadJob = getOutputValuesFromSpreadJob(outCtx.getName(), chainJob, originStep);
+            outDir = outDir + originStep + fileSeparator;
+            for (String value : outputValuesFromSpreadJob) {
+                copyInput(outDir, destDir, outCtx, value);
+            }
+        } else { // OTHER CASES
+            copyFromSingleJob(destDir, chainJob, outDir, outCtx, usedBy);
         }
     }
 
     private void copySpreadInput(String dest, Input input, String jobId) throws EngineException {
         String source = dest.substring(0, dest.indexOf(jobId));
         String inValue = input.getValue();
-        int begin = inValue.lastIndexOf(File.separatorChar);
+        int begin = inValue.lastIndexOf(fileSeparator);
         String value = inValue.substring(begin + 1);
         String valStr = source + value;
         if (input.getType().equalsIgnoreCase("directory")) {
@@ -381,17 +414,17 @@ public class EngineLocalDefault extends Engine {
             for (String dependet : usedBy) {
                 Output outputCtx = chainJob.getOutputById(dependet);
                 String value = outputCtx.getValue().toString();
-                copyChainInput(outDir, destDir, outputCtx, value);
+                copyInput(outDir, destDir, outputCtx, value);
             }
         } else {
             String value = outCtx.getValue().toString();
-            copyChainInput(outDir, destDir, outCtx, value);
+            copyInput(outDir, destDir, outCtx, value);
         }
     }
 
-    private void copyChainInput(String source, String dest, Output outCtx, String value) throws EngineException {
+    private void copyInput(String source, String dest, Output outCtx, String value) throws EngineException {
         String valStr = source + value;
-        int begin = valStr.lastIndexOf(File.separatorChar);
+        int begin = valStr.lastIndexOf(fileSeparator);
         String inputName = valStr.substring(begin + 1);
         if (outCtx.getType().equalsIgnoreCase("directory")) {
             copyDirectory(valStr, dest + inputName);
@@ -401,7 +434,7 @@ public class EngineLocalDefault extends Engine {
     }
 
     private void copyDirectory(String source, String dest) throws EngineException {
-        int begin = source.lastIndexOf(File.separatorChar);
+        int begin = source.lastIndexOf(fileSeparator);
         String inputName = source.substring(begin + 1);
         try {
             IOUtils.copyDirectory(source, dest);
@@ -411,7 +444,7 @@ public class EngineLocalDefault extends Engine {
     }
 
     private void copyFiles(String source, String dest) throws EngineException {
-        int begin = source.lastIndexOf(File.separatorChar);
+        int begin = source.lastIndexOf(fileSeparator);
         String inputName = source.substring(begin + 1);
         try {
             IOUtils.copyFile(source, dest);

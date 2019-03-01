@@ -12,5 +12,13 @@ public interface IEngine {
     Pipeline execute(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters, Arguments arguments) throws EngineException;
     Pipeline execute(String intermediateRepresentation, Arguments arguments) throws EngineException;
     boolean stop(String executionId) throws EngineException;
+    boolean clean(String executionId) throws EngineException;
+    boolean cleanAll() throws EngineException;
+
+//    IEXECUTOR
+//    void execute(Pipeline pipeline, Map<String, Object> parameters, Arguments arguments) throws EngineException;
+//    boolean stop(String executionId) throws EngineException;
+//    boolean clean(String executionId) throws EngineException;
+//    boolean cleanAll() throws EngineException;
 
 }

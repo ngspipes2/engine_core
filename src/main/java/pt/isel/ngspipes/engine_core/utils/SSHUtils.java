@@ -4,7 +4,6 @@ import com.jcraft.jsch.*;
 
 import java.io.*;
 import java.util.Properties;
-import java.util.Vector;
 
 public class SSHUtils {
 
@@ -12,44 +11,41 @@ public class SSHUtils {
         Session session = getSessionByConfig(sshConfig);
         ChannelSftp channelSftp;
 
-        Properties config = new Properties();
-        config.put("StrictHostKeyChecking", "no");
-        session.setConfig(config);
-        session.connect();
-
         channelSftp = (ChannelSftp) session.openChannel("sftp");
         channelSftp.connect();
         return channelSftp;
     }
 
-    public static void upload(String dest, String source, ChannelSftp sftp) throws SftpException, FileNotFoundException, UnsupportedEncodingException {
+    public static void upload(String base_dir, String dest, String source, ChannelSftp sftp, String fileSeparator) throws SftpException, FileNotFoundException, UnsupportedEncodingException {
         File file = new File(source);
-        createIfNotExist(dest, sftp);
+        createIfNotExist(base_dir, dest, sftp, fileSeparator);
         sftp.cd(dest);
         System.out.println("directory: " + dest);
         if(file.isFile()){
             InputStream ins = new FileInputStream(file);
             sftp.put(ins, new String(file.getName().getBytes(),"UTF-8"));
-        } else{
+            sftp.chmod(511, dest + fileSeparator + file.getName());
+        } else if(file.isDirectory() || file.listFiles() == null) {
+            createFolder(file.getPath(), sftp);
+        } else {
             File[] files = file.listFiles();
-            assert files != null;
             for (File file2 : files) {
                 String dir = file2.getAbsolutePath();
                 if(file2.isDirectory()){
-                    String str = dir.substring(dir.lastIndexOf(File.separatorChar));
+                    String str = dir.substring(dir.lastIndexOf(fileSeparator));
                     dest = dest + str;
                 }
                 System.out.println("directory is :" + dest);
-                upload(dest, source + dir, sftp);
+                upload(base_dir, dest, source + dir, sftp, fileSeparator);
             }
         }
     }
 
-    public static void copy(String source, String dest, String inputName, SSHConfig config) throws JSchException, InterruptedException, SftpException {
+    public static void copy(String base_dir, String source, String dest, String inputName, SSHConfig config, String fileSeparator) throws JSchException, InterruptedException, SftpException {
         ChannelSftp sftp = null;
         try {
             sftp = SSHUtils.getChannelSftp(config);
-            createIfNotExist(dest, sftp);
+            createIfNotExist(base_dir, dest, sftp, fileSeparator);
             String cpyCmd = "cp -R " + source + inputName + " " + dest;
             Session session = sftp.getSession();
             ChannelExec channel = (ChannelExec) session.openChannel("exec");
@@ -69,15 +65,24 @@ public class SSHUtils {
         }
     }
 
-    public static void createIfNotExist(String folderPath, ChannelSftp sftp) throws SftpException {
+    public static void createIfNotExist(String base_dir, String folderPath, ChannelSftp sftp, String fileSeparator) throws SftpException {
+        sftp.cd(base_dir);
+        String[] folders = folderPath.split(fileSeparator);
+        for ( String folder : folders ) {
+            if (folder.isEmpty() || base_dir.contains(folder))
+                continue;
+            createFolder(folder, sftp);
+        }
+        sftp.chmod(511, folderPath);
+    }
+
+    private static void createFolder(String folderPath, ChannelSftp sftp) throws SftpException {
         try {
-            Vector content = sftp.ls(folderPath);
-            if(content == null){
-                sftp.mkdir(folderPath);
-                System.out.println("mkdir:" + folderPath);
-            }
+            sftp.cd(folderPath);
         } catch (SftpException e) {
             sftp.mkdir(folderPath);
+            sftp.cd(folderPath);
+            System.out.println("mkdir:" + folderPath);
         }
     }
 
@@ -87,6 +92,12 @@ public class SSHUtils {
             session = getSession(sshConfig);
         else
             session = getSessionWithKey(sshConfig);
+
+        Properties conf = new Properties();
+        conf.put("StrictHostKeyChecking", "no");
+        session.setConfig(conf);
+        session.connect();
+
         return session;
     }
 
@@ -104,6 +115,7 @@ public class SSHUtils {
         Session session = jsch.getSession(config.getUser(), config.getHost(), config.getPort());
         session.setPassword(config.getPassword());
         session.setConfig("StrictHostKeyChecking", "no"); // new
+
         return session;
     }
 

@@ -31,7 +31,7 @@ public class PipelineValidationTest {
 //            Arguments arguments = new Arguments("", true);
 //            Map<String, Object> parameters = new HashMap<>();
 //            parameters.put("blastx_out", "out");
-//            Pipeline pipeline = JobFactory.create("abc", pipelineDescriptor, parameters, arguments, "");
+//            Pipeline pipeline = PipelineFactory.create("abc", pipelineDescriptor, parameters, arguments, "");
 //            ValidateUtils.validateRepositories(pipelineDescriptor.getRepositories());
 //            ValidateUtils.validateNonCyclePipeline(pipelineDescriptor, parameters);
 //            ValidateUtils.validateJobs(pipelineDescriptor, parameters);
