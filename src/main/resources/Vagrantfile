@@ -2,7 +2,6 @@
 # vi: set ft=ruby :
 require 'json'
 
-# Vagrantfile API/syntax version. Don't touch unless you know what you're doing!
 VAGRANTFILE_API_VERSION = "2"
 
 current_dir    = File.dirname(File.expand_path(__FILE__))
@@ -15,28 +14,14 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
  config.vm.define vagrant_config['hostname'] do |ngs|
     ngs.vm.provider :virtualbox do |vb|
-      # Don't boot with headless mode
-      #   vb.gui = true
       vb.name = vagrant_config['hostname']
-      # Enable creating symlinks between guest and host
       vb.customize [
-        # see https://github.com/mitchellh/vagrant/issues/713#issuecomment-17296765
-        # 1) Added these lines to my config :
-        #
-        # 2) run this command in an admin command prompt on windows :
-        #    >> fsutil behavior set SymlinkEvaluation L2L:1 R2R:1 L2R:1 R2L:1
-        #    see http://technet.microsoft.com/ja-jp/library/cc785435%28v=ws.10%29.aspx
-        # 3) REBOOT HOST MACHINE
-        # 4) 'vagrant up' from an admin command prompt
         "setextradata", :id,
         "VBoxInternal2/SharedFoldersEnableSymlinksCreate/vagrant-root", "1"
       ]
 
-      # Create a private network, which allows host-only access to the machine
-      # using a specific IP.
       config.vm.network "private_network", ip: vagrant_config['ip_address']
 
-      # Use VBoxManage to customize the VM. For example to change memory:
       vb.customize [
         'modifyvm', :id,
         '--natdnshostresolver1', 'on',

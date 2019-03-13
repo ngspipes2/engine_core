@@ -61,7 +61,7 @@ public class ValidateUtils {
     public static void validatePipelineState(Pipeline pipeline) throws EngineException {
         ExecutionState executionState = pipeline.getState();
         if (executionState.getState().equals(StateEnum.FAILED))
-            throw executionState.getException();
+            throw new EngineException("Error validating pipeline.", executionState.getException());
     }
 
     public static void validateResources(Job job, Pipeline pipeline) throws EngineException {

@@ -291,8 +291,8 @@ public class SpreadJobExpander {
         environment.setDisk(baseEnvironment.getDisk());
         environment.setMemory(baseEnvironment.getMemory());
         environment.setCpu(baseEnvironment.getCpu());
-        environment.setWorkDirectory(baseEnvironment.getWorkDirectory() + File.separatorChar + stepId);
-        environment.setOutputsDirectory(baseEnvironment.getOutputsDirectory() + File.separatorChar + stepId);
+        environment.setWorkDirectory(baseEnvironment.getWorkDirectory() + fileSeparator + stepId);
+        environment.setOutputsDirectory(baseEnvironment.getOutputsDirectory() + fileSeparator + stepId);
 
         return environment;
     }

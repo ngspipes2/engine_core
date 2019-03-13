@@ -1,5 +1,7 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
+import com.github.brunomndantas.tpl4j.factory.TaskFactory;
+import com.github.brunomndantas.tpl4j.task.Task;
 import pt.isel.ngspipes.engine_core.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_core.entities.ExecutionState;
 import pt.isel.ngspipes.engine_core.entities.StateEnum;
@@ -7,9 +9,6 @@ import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
-import pt.isel.ngspipes.engine_core.tasks.BasicTask;
-import pt.isel.ngspipes.engine_core.tasks.Task;
-import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.*;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
@@ -24,7 +23,7 @@ public class EngineLocalDefault extends Engine {
                                                     File.separatorChar + "Engine";
     private static final String TAG = "LocalEngine";
 
-    private final Map<String, Map<Job, BasicTask<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
+    private final Map<String, Map<Job, Task<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
     private final ConsoleReporter reporter = new ConsoleReporter();
 
 
@@ -43,7 +42,7 @@ public class EngineLocalDefault extends Engine {
             TASKS_BY_EXEC_ID.put(pipeline.getName(), new HashMap<>());
             pipeline.getState().setState(StateEnum.RUNNING);
         }
-        Map<Job, BasicTask<Void>> taskMap = getTasks(graph, pipeline, new HashMap<>());
+        Map<Job, Task<Void>> taskMap = getTasks(graph, pipeline, new HashMap<>());
         scheduleFinishPipelineTask(pipeline, taskMap);
         scheduleChildTasks(pipeline, taskMap);
         scheduleParentsTasks(graph, pipeline.getName(), taskMap);
@@ -86,18 +85,10 @@ public class EngineLocalDefault extends Engine {
 
     @Override
     public boolean stop(String executionId) {
-        boolean stopped = true;
+        if (TASKS_BY_EXEC_ID.containsKey(executionId))
+            TASKS_BY_EXEC_ID.get(executionId).values().forEach(Task::cancel);
 
-        for (Map.Entry<Job, BasicTask<Void>> step : TASKS_BY_EXEC_ID.get(executionId).entrySet()) {
-            step.getValue().cancel();
-            try {
-                stopped = stopped && step.getValue().cancelledEvent.await(200);
-            } catch (InterruptedException e) {
-                ExecutionState state = new ExecutionState();
-                state.setState(StateEnum.STOPPED);
-            }
-        }
-        return stopped;
+        return true;
     }
 
     @Override
@@ -115,31 +106,30 @@ public class EngineLocalDefault extends Engine {
         pipelines.get(executionId).setState(state);
     }
 
-    private void scheduleFinishPipelineTask(Pipeline pipeline, Map<Job, BasicTask<Void>> taskMap) {
-        BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
+    private void scheduleFinishPipelineTask(Pipeline pipeline, Map<Job, Task<Void>> taskMap) {
+        Task<Void> task = TaskFactory.create("finish" + pipeline.getName(), () -> {
             try {
                 pipeline.getState().setState(StateEnum.SUCCESS);
                 reporter.reportInfo("Pipeline Finished");
-                TaskFactory.dispose();
             } catch (Exception e) {
 
             }
         });
-        Task<Collection<Void>> tasks = TaskFactory.whenAllTasks(new ArrayList<>(taskMap.values()));
+        Task<Collection<Void>> tasks = TaskFactory.whenAll(new ArrayList<>(taskMap.values()));
         tasks.then(task);
     }
 
-    private void scheduleChildTasks(Pipeline pipeline, Map<Job, BasicTask<Void>> taskMap) {
-        for (Map.Entry<Job, BasicTask<Void>> entry : taskMap.entrySet()) {
+    private void scheduleChildTasks(Pipeline pipeline, Map<Job, Task<Void>> taskMap) {
+        for (Map.Entry<Job, Task<Void>> entry : taskMap.entrySet()) {
             if (!entry.getKey().getParents().isEmpty()) {
                 runWhenAll(pipeline, entry.getKey(), taskMap);
             }
         }
     }
 
-    private void runWhenAll(Pipeline pipeline, Job job, Map<Job, BasicTask<Void>> taskMap) {
+    private void runWhenAll(Pipeline pipeline, Job job, Map<Job, Task<Void>> taskMap) {
         Collection<Task<Void>> parentsTasks = getParentsTasks(pipeline, job.getParents());
-        Task<Collection<Void>> tasks = TaskFactory.whenAllTasks(parentsTasks);
+        Task<Collection<Void>> tasks = TaskFactory.whenAll(parentsTasks);
         tasks.then(taskMap.get(job));
     }
 
@@ -147,10 +137,10 @@ public class EngineLocalDefault extends Engine {
         Collection<Task<Void>> parentsTasks = new LinkedList<>();
 
         for (String parent : parents) {
-            Map<Job, BasicTask<Void>> jobBasicTaskMap = TASKS_BY_EXEC_ID.get(pipeline.getName());
-            jobBasicTaskMap.keySet().forEach((jobById) -> {
+            Map<Job, Task<Void>> jobTaskMap = TASKS_BY_EXEC_ID.get(pipeline.getName());
+            jobTaskMap.keySet().forEach((jobById) -> {
                 if (jobById.getId().equalsIgnoreCase(parent)) {
-                    BasicTask<Void> e = jobBasicTaskMap.get(jobById);
+                    Task<Void> e = jobTaskMap.get(jobById);
                     parentsTasks.add(e);
                 }
             });
@@ -159,10 +149,10 @@ public class EngineLocalDefault extends Engine {
         return parentsTasks;
     }
 
-    private Map<Job, BasicTask<Void>> getTasks(Collection<ExecutionNode> executionGraph, Pipeline pipeline, Map<Job, BasicTask<Void>> tasks) {
+    private Map<Job, Task<Void>> getTasks(Collection<ExecutionNode> executionGraph, Pipeline pipeline, Map<Job, Task<Void>> tasks) {
         for (ExecutionNode node : executionGraph) {
             Job job = node.getJob();
-            BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
+            Task<Void> task = TaskFactory.create(job.getId(), () -> {
                 try {
                     runTask(job, pipeline);
                 } catch (EngineException e) {
@@ -218,7 +208,7 @@ public class EngineLocalDefault extends Engine {
     }
 
     private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId,
-                                      Map<Job, BasicTask<Void>> taskMap) {
+                                      Map<Job, Task<Void>> taskMap) {
         try {
             executeParents(executionGraph, taskMap);
         } catch (EngineException e) {
@@ -227,7 +217,7 @@ public class EngineLocalDefault extends Engine {
         }
     }
 
-    private void executeParents(Collection<ExecutionNode> executionGraph, Map<Job, BasicTask<Void>> task)
+    private void executeParents(Collection<ExecutionNode> executionGraph, Map<Job, Task<Void>> task)
                                 throws EngineException {
         for (ExecutionNode parentNode : executionGraph) {
             Job job = parentNode.getJob();
@@ -235,7 +225,7 @@ public class EngineLocalDefault extends Engine {
                 continue;
             try {
                 logger.trace(TAG + ":: Executing step " + job.getId());
-                task.get(job).run();
+                task.get(job).start();
             } catch (Exception e) {
                 logger.error(TAG + ":: Executing step " + job.getId(), e);
                 throw new EngineException("Error executing step: " + job.getId(), e);

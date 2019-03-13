@@ -1,5 +1,7 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
+import com.github.brunomndantas.tpl4j.factory.TaskFactory;
+import com.github.brunomndantas.tpl4j.task.Task;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.SftpException;
@@ -9,8 +11,6 @@ import pt.isel.ngspipes.engine_core.entities.factories.ChronosJobStatusFactory;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
-import pt.isel.ngspipes.engine_core.tasks.Task;
-import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.*;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
@@ -18,8 +18,10 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Array;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 public class EngineMesos extends Engine {
 
@@ -29,20 +31,20 @@ public class EngineMesos extends Engine {
 //    private static final String  SSH_HOST = "127.0.0.1";
 //    private static final String  SSH_HOST = "10.0.2.9";
 //    private static final String  SSH_HOST = "10.62.73.31";
-//    private static final String  SSH_HOST = "10.141.141.11";
-    private static final String  SSH_HOST = "192.92.149.146";
+    private static final String  SSH_HOST = "10.141.141.11";
+//    private static final String  SSH_HOST = "192.92.149.146";
 //    private static final int  SSH_PORT = 5555;
     private static final int  SSH_PORT = 22;
-//    private static final String  SSH_USER = "vagrant";
+    private static final String  SSH_USER = "vagrant";
 //    private static final String  SSH_USER = "calmen";
 //    private static final String  SSH_USER = "root";
-    private static final String  SSH_USER = "centos";
-    private static final String  SSH_PASSWORD = "p1p3s2357NGS";
-//    private static final String  SSH_PASSWORD = "vagrant";
+//    private static final String  SSH_USER = "centos";
+//    private static final String  SSH_PASSWORD = "p1p3s2357NGS";
+    private static final String  SSH_PASSWORD = "vagrant";
 //    private static final String  SSH_PASSWORD = "ngs##19";
 //    private static final String KEY_PATH = "/home/dantas/Desktop/main/privateJava";
-    private static final String KEY_PATH = "E:\\Work\\NGSPipes\\key\\privateJava";
-//    private static final String KEY_PATH = "E:\\\\Escola\\\\ISEL\\\\MEIC\\\\56_Semestre_Dissertacao\\\\vagrantMesos\\\\.vagrant\\\\machines\\\\\\ngspipes2\\\\virtualbox\\\\private_key";
+//    private static final String KEY_PATH = "E:\\Work\\NGSPipes\\key\\privateJava";
+    private static final String KEY_PATH = "E:\\\\Escola\\\\ISEL\\\\MEIC\\\\56_Semestre_Dissertacao\\\\vagrantMesos\\\\.vagrant\\\\machines\\\\\\ngspipes2\\\\virtualbox\\\\private_key";
     private static Collection<String> IGNORE_FILES = new LinkedList<>(Arrays.asList("." , ".."));
     private static final String TAG = "MesosEngine";
 
@@ -52,16 +54,16 @@ public class EngineMesos extends Engine {
     private static final String CHRONOS_JOB_SEARCH = "jobs/search?name=";
 
 //    private final String chronosEndpoint = "http://10.62.73.31:4400/scheduler/";
-//    private final String chronosEndpoint = "http://10.141.141.11:4400/scheduler/";
-    private final String chronosEndpoint = "http://192.92.149.146:4400/scheduler/";
+    private final String chronosEndpoint = "http://10.141.141.11:4400/scheduler/";
+//    private final String chronosEndpoint = "http://192.92.149.146:4400/scheduler/";
 //    private final String chronosEndpoint = "http://10.0.2.9:4400/scheduler/";
 //    private final String chronosEndpoint = "http://localhost:4400/scheduler/";
 //    private final String chronosEndpoint = "http://localhost:5059/scheduler/";
 //    private final String chronosEndpoint = "http://localhost:5055/scheduler/";
 //    private final String BASE_DIRECTORY = "/home/pipes";
 //    private final String BASE_DIRECTORY = "/home/calmen";
-//    private final String BASE_DIRECTORY = "/home/vagrant";
-    private final String BASE_DIRECTORY = "/home/centos/pipes";
+    private final String BASE_DIRECTORY = "/home/vagrant";
+//    private final String BASE_DIRECTORY = "/home/centos/pipes";
     private static final String RUN_CMD = "%1$s";
     private static final String WORK_DIRECTORY = System.getProperty("user.home") + File.separatorChar + "NGSPipes" +
             File.separatorChar + "Engine";
@@ -91,7 +93,8 @@ public class EngineMesos extends Engine {
             storeJobs(pipeline, executionJobs);
             sortByExecutionOrder(executionGraph, pipeline, executionJobs);
             execute(pipeline, executionJobs);
-        } catch (EngineException e) {
+            scheduleFinishPipeline(pipeline, executionJobs);
+        } catch (EngineException | IOException e) {
             ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
             updatePipelineState(pipeline.getName(), state);
         }
@@ -114,14 +117,15 @@ public class EngineMesos extends Engine {
         for (Job job : TASKS_BY_EXEC_ID.get(executionId)) {
             try {
                 String url = chronosEndpoint + CHRONOS_JOB + "/" + job.getId();
-                Task<Void> delete = TaskFactory.createAndExecuteTask(() -> {
+                Task<Void> delete = TaskFactory.createAndStart("stop" + executionId, () -> {
                     try {
                         HttpUtils.delete(url);
                     } catch (IOException e) {
                         stopped.set(false);
+                        throw e;
                     }
                 });
-                boolean wait = delete.cancelledEvent.await(200);
+                boolean wait = delete.getStatus().cancelledEvent.await(200);
                 stopped.set(stopped.get() && wait);
             } catch (InterruptedException e) {
                 ExecutionState state = new ExecutionState();
@@ -197,6 +201,20 @@ public class EngineMesos extends Engine {
 
 
 
+    private void scheduleFinishPipeline(Pipeline pipeline, List<Job> executionJobs) throws IOException {
+        String jobId = "success" + pipeline.getName();
+        String successJob = getSuccessChronosJob(executionJobs, jobId, pipeline.getName());
+        HttpUtils.post(chronosEndpoint + CHRONOS_DEPENDENCY, successJob);
+        waitUntilJobFinish(new String[] {jobId, pipeline.getName()});
+        pipeline.getState().setState(StateEnum.SUCCESS);
+        reporter.reportInfo("Pipeline Finished");
+    }
+
+    private String getSuccessChronosJob(List<Job> executionJobs, String jobId, String pipelineName) throws IOException {
+        List<String> parents = executionJobs.stream().map((job)-> "validateOutputs_" + pipelineName + "_" + job.getId()).collect(Collectors.toList());
+        return getDependentChronosJob("ls", parents, jobId);
+    }
+
     private static SSHConfig getSshConfig() {
         return new SSHConfig(SSH_USER, SSH_PASSWORD, KEY_PATH, SSH_HOST, SSH_PORT);
 //        return new SSHConfig(SSH_USER, SSH_PASSWORD, SSH_HOST, SSH_PORT);
@@ -210,45 +228,28 @@ public class EngineMesos extends Engine {
     }
 
     private void sortByExecutionOrder(Collection<ExecutionNode> executionGraph, Pipeline pipeline, List<Job> executionJobs) {
-        List<Job> pendents = new LinkedList<>();
-        List<Job> parents = new LinkedList<>();
-        Integer totalJobs = 0;
         executionGraph.forEach((node) -> executionJobs.add(node.getJob()));
         for (ExecutionNode node : executionGraph) {
-            addByDependency(pipeline, executionJobs, pendents, parents, node, totalJobs);
-        }
-        while (executionJobs.size() < totalJobs) {
-            for (Job pendent : pendents) {
-                int present = (int) parents.stream().filter(executionJobs::contains).count();
-                if (present == parents.size()) {
-                    executionJobs.add(pendent);
-                }
-            }
+            addByDependency(pipeline, executionJobs, node);
         }
     }
 
-    private void addByDependency(Pipeline pipeline, List<Job> executionJobs, List<Job> pendent, List<Job> parents, ExecutionNode node, Integer totalJobs) {
+    private void addByDependency(Pipeline pipeline, List<Job> executionJobs, ExecutionNode node) {
         for (ExecutionNode child : node.getChilds()) {
+            List<Job> parents = new LinkedList<>();
             Job job = child.getJob();
-            job.getParents().forEach((parent) -> parents.add(pipeline.getJobById(parent)));
+            if (executionJobs.contains(job))
+                continue;
+            job.getParents().forEach((parent) -> {
+                Job parentJobById = pipeline.getJobById(parent);
+                if (!parents.contains(parentJobById))
+                    parents.add(parentJobById);
+            });
             int present = (int) parents.stream().filter(executionJobs::contains).count();
             if (present == parents.size()) {
                 executionJobs.add(job);
-                totalJobs++;
-                addByDependency(pipeline, executionJobs, pendent, parents, child, totalJobs);
-            } else {
-                pendent.add(job);
-                totalJobs++;
-                addPendents(child.getChilds(), pendent, totalJobs);
+                addByDependency(pipeline, executionJobs, child);
             }
-        }
-    }
-
-    private void addPendents(List<ExecutionNode> childs, List<Job> pendent, Integer totalJobs) {
-        for (ExecutionNode child : childs ){
-            pendent.add(child.getJob());
-            totalJobs++;
-            addPendents(child.getChilds(), pendent, totalJobs);
         }
     }
 
@@ -279,7 +280,7 @@ public class EngineMesos extends Engine {
             HttpUtils.post(url, chronosJob);
             String jobId = pipeline.getName() + "_" + job.getId();
             validateOutputs(job, pipeline.getName());
-            runInconclusiveDependencies(job, pipeline, this::waitUntilJobFinish, jobId);
+            runInconclusiveDependencies(job, pipeline, this::waitUntilJobFinish, jobId, pipeline.getName());
         } catch (IOException e) {
             logger.error("Executing step: " + job.getId()
                     + " from pipeline: " + pipeline.getName(), e);
@@ -288,21 +289,23 @@ public class EngineMesos extends Engine {
         }
     }
 
-    private void waitUntilJobFinish(String jobId) {
-        String url = chronosEndpoint + CHRONOS_JOB_SEARCH + jobId;
+    private void waitUntilJobFinish(String[] ids) {
+        String url = chronosEndpoint + CHRONOS_JOB_SEARCH + ids[0];
         ChronosJobStatusDto chronosJobStatusDto = null;
         try {
             do {
                 String content = HttpUtils.get(url);
                 chronosJobStatusDto = ChronosJobStatusFactory.getChronosJobStatusDto(content);
+                Thread.sleep(5000);
             } while (chronosJobStatusDto.successCount <= 0);
-        } catch (IOException e) {
-            //TODO:
+        } catch (IOException | InterruptedException e) {
+            ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
+            updatePipelineState(ids[1], state);
         }
     }
 
     private String getChronosJob(String executeCmd, SimpleJob job, String executionId) throws EngineException {
-        String jobDir = BASE_DIRECTORY + fileSeparator + executionId + fileSeparator + job.getId();
+        String jobDir = job.getEnvironment().getOutputsDirectory();
         try {
             if (job.getParents().isEmpty())
                 return getChronosJob(executeCmd, job, executionId, jobDir);
@@ -327,12 +330,10 @@ public class EngineMesos extends Engine {
         }
     }
 
-    private String getDependentChronosJob(String executeCmd, String parent, String id) throws IOException {
+    private String getDependentChronosJob(String executeCmd, List<String> parents, String id) throws IOException {
         String epsilon = "P1Y12M12D";
         String shell = "true";
-        List<String> parents = new LinkedList<>();
-        parents.add(parent);
-        String name = id + "_" + parent;
+        String name = id + "_" + (parents.size() == 1 ? parents.get(0) : "");
         ChronosJob chronosJob = new ChronosJob(parents, epsilon, "0.5f", shell, executeCmd, name, "512");
         return JacksonUtils.serialize(chronosJob);
     }
@@ -432,7 +433,8 @@ public class EngineMesos extends Engine {
         String changePermissions = " && chmod -R 777 " + destDir;
         parent = "validateOutputs_" + parent;
         try {
-            String copyTask = getDependentChronosJob(createDestDir + copyInputs + changePermissions, parent, id);
+            String executeCmd = createDestDir + copyInputs + changePermissions;
+            String copyTask = getDependentChronosJob(executeCmd, Collections.singletonList(parent), id);
             HttpUtils.post(chronosEndpoint + CHRONOS_DEPENDENCY, copyTask);
         } catch (IOException e) {
             logger.error("Error copying input: " + value , e);
@@ -500,7 +502,7 @@ public class EngineMesos extends Engine {
         try {
             String parent = executionId + "_" + stepCtx.getId();
             String id = "validateOutputs";
-            String chronosJob = getDependentChronosJob(chronosJobCmd.toString(), parent, id);
+            String chronosJob = getDependentChronosJob(chronosJobCmd.toString(), Collections.singletonList(parent), id);
             HttpUtils.post(chronosEndpoint + CHRONOS_DEPENDENCY, chronosJob);
         } catch (IOException e) {
             logger.error("Error step: " + stepCtx.getId() + " didn't produces all outputs." , e);

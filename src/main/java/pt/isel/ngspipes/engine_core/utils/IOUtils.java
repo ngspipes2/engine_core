@@ -43,9 +43,16 @@ public class IOUtils {
     }
 
     public static List<String> getFileNamesByPattern(String directoryPath, String pattern) {
+        int separatorIdx = pattern.indexOf(File.separatorChar);
+        String currPattern;
+        if (separatorIdx != -1) {
+            directoryPath = directoryPath + File.separatorChar + pattern.substring(0, separatorIdx);
+            currPattern = pattern.substring(separatorIdx + 1);
+        } else
+            currPattern = pattern;
         File dir = new File(directoryPath);
         List<String> names = new LinkedList<>();
-        File [] files = dir.listFiles((dir1, name) -> name.matches(pattern));
+        File [] files = dir.listFiles((dir1, name) -> name.matches(currPattern));
 
         if (files != null) {
             for (File file : files)
@@ -66,9 +73,9 @@ public class IOUtils {
         Path sourcePath = Paths.get(source);
         Path destPath = Paths.get(dest);
         File destFile = new File(destPath.toString());
-        destFile.getParentFile().mkdirs();
-        destFile.createNewFile();
-        Files.copy(sourcePath, destPath, StandardCopyOption.REPLACE_EXISTING);
+        if (!destFile.getParentFile().exists())
+            destFile.getParentFile().mkdirs();
+        Files.copy(sourcePath, destPath);
     }
 
     private static void copyGlobFiles(String source, String dest) throws IOException {

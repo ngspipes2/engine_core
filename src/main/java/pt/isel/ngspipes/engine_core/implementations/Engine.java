@@ -1,5 +1,6 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
+import com.github.brunomndantas.tpl4j.factory.TaskFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import pt.isel.ngspipes.engine_core.entities.Arguments;
@@ -13,7 +14,6 @@ import pt.isel.ngspipes.engine_core.entities.factories.JobFactory;
 import pt.isel.ngspipes.engine_core.entities.factories.PipelineFactory;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
-import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.JacksonUtils;
 import pt.isel.ngspipes.engine_core.utils.SpreadJobExpander;
 import pt.isel.ngspipes.engine_core.utils.TopologicSorter;
@@ -43,7 +43,7 @@ public abstract class Engine implements IEngine {
     @Override
     public Pipeline execute(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
                             Arguments arguments) throws EngineException {
-        String id = generateExecutionId(pipelineDescriptor.getName());
+        String id = generateExecutionId(pipelineDescriptor.getName());//"1234";
         validate(pipelineDescriptor, parameters);
         Pipeline pipeline = createPipeline(pipelineDescriptor, parameters, arguments, id);
         return internalExecute(arguments.parallel, pipeline);
@@ -64,11 +64,11 @@ public abstract class Engine implements IEngine {
 
 
 
-    void runInconclusiveDependencies(SimpleJob job, Pipeline pipeline, Consumer<String> wait, String id) {
+    void runInconclusiveDependencies(SimpleJob job, Pipeline pipeline, Consumer<String[]> wait, String id, String pipelineName) {
         if (job.isInconclusive()) {
             job.setInconclusive(false);
-            TaskFactory.createAndExecuteTask(() -> {
-                wait.accept(id);
+            TaskFactory.createAndStart("inconclusive" + pipeline.getName(), () -> {
+                wait.accept(new String[]{id, pipelineName});
                 Collection<ExecutionNode> graph = TopologicSorter.parallelSort(pipeline, job);
                 try {
                     for (ExecutionNode node : graph) {
@@ -85,7 +85,7 @@ public abstract class Engine implements IEngine {
         }
     }
 
-    void updateState(Pipeline pipeline, Job job, EngineException e, StateEnum state) {
+    void updateState(Pipeline pipeline, Job job, Exception e, StateEnum state) {
         ExecutionState newState = new ExecutionState(state, e);
         job.getState().setState(newState.getState());
         if (e != null)
@@ -145,13 +145,14 @@ public abstract class Engine implements IEngine {
     }
 
     private void executePipeline(boolean parallel, Pipeline pipeline) {
-        TaskFactory.createAndExecuteTask(() -> {
+        TaskFactory.createAndStart("executor" + pipeline.getName(), () -> {
             try {
                 execute(pipeline, parallel);
             } catch (EngineException e) {
                 logger.error("Error executing pipeline: " + pipeline.getName(), e);
                 ExecutionState executionState = new ExecutionState(StateEnum.FAILED, e);
                 pipeline.setState(executionState);
+                throw e;
             }
         });
     }

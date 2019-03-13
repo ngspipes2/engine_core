@@ -37,8 +37,8 @@ public class ProcessRunner {
                 reporter.report(line);
             }
         } finally {
-            if (sb.length() != 0)
-                logger.error(sb.toString());
+//            if (sb.length() != 0)
+//                logger.error(sb.toString());
 
         }
     }

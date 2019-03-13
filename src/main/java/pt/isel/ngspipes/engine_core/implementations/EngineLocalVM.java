@@ -1,24 +1,17 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
-import com.jcraft.jsch.ChannelSftp;
-import com.jcraft.jsch.JSchException;
-import com.jcraft.jsch.SftpException;
-import org.springframework.util.StringUtils;
+import com.github.brunomndantas.tpl4j.factory.TaskFactory;
+import com.github.brunomndantas.tpl4j.task.Task;
 import pt.isel.ngspipes.engine_core.entities.*;
 import pt.isel.ngspipes.engine_core.entities.contexts.*;
 import pt.isel.ngspipes.engine_core.exception.CommandBuilderException;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.executionReporter.ConsoleReporter;
-import pt.isel.ngspipes.engine_core.tasks.BasicTask;
-import pt.isel.ngspipes.engine_core.tasks.Task;
-import pt.isel.ngspipes.engine_core.tasks.TaskFactory;
 import pt.isel.ngspipes.engine_core.utils.*;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.util.*;
 
 public class EngineLocalVM extends Engine {
@@ -30,13 +23,16 @@ public class EngineLocalVM extends Engine {
     private static final int SSH_PORT = 22;
     private static final String FILE_SEPARATOR = "/";
     private static final String SSH_USER = "vagrant";
-    private final Map<String, Map<Job, BasicTask<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
+    private final Map<String, Map<Job, Task<Void>>> TASKS_BY_EXEC_ID = new HashMap<>();
     private static final String TAG = "LocalVMEngine";
     private static final String KEY_PATH = "%1$s\\.vagrant\\machines\\%2$s\\virtualbox\\private_key";
     private static final String configName = "config.json";
 
     private int ipAddressSuffix = 14;
     private final ConsoleReporter reporter = new ConsoleReporter();
+//    private final DummyReporter reporter = new DummyReporter();
+
+//    private boolean exist = false;
 
 
     public EngineLocalVM() {
@@ -51,9 +47,11 @@ public class EngineLocalVM extends Engine {
     protected void configure(Pipeline pipeline) throws EngineException {
         logger.info("Configuring " + TAG);
         try {
-            ipAddressSuffix++;
-            createAndCopyVMFiles(pipeline);
-            initVM(pipeline);
+//            if (!exist) {
+                ipAddressSuffix++;
+                createAndCopyVMFiles(pipeline);
+                initVM(pipeline);
+//            }
         } catch (IOException e) {
             throw new EngineException("Error initiating engine", e);
         }
@@ -65,7 +63,8 @@ public class EngineLocalVM extends Engine {
             TASKS_BY_EXEC_ID.put(pipeline.getName(), new HashMap<>());
             pipeline.getState().setState(StateEnum.RUNNING);
         }
-        Map<Job, BasicTask<Void>> taskMap = getTasks(graph, pipeline, new HashMap<>());
+        Map<Job, Task<Void>> taskMap = new HashMap<>();
+        createTasks(graph, pipeline, taskMap);
         scheduleFinishPipelineTask(pipeline, taskMap);
         scheduleChildTasks(pipeline, taskMap);
         scheduleParentsTasks(graph, pipeline.getName(), taskMap);
@@ -108,18 +107,10 @@ public class EngineLocalVM extends Engine {
 
     @Override
     public boolean stop(String executionId) throws EngineException {
-        boolean stopped = true;
+        if (TASKS_BY_EXEC_ID.containsKey(executionId))
+            TASKS_BY_EXEC_ID.get(executionId).values().forEach(Task::cancel);
 
-        for (Map.Entry<Job, BasicTask<Void>> step : TASKS_BY_EXEC_ID.get(executionId).entrySet()) {
-            step.getValue().cancel();
-            try {
-                stopped = stopped && step.getValue().cancelledEvent.await(200);
-            } catch (InterruptedException e) {
-                ExecutionState state = new ExecutionState();
-                state.setState(StateEnum.STOPPED);
-            }
-        }
-        return stopped;
+        return true;
     }
 
     @Override
@@ -176,55 +167,57 @@ public class EngineLocalVM extends Engine {
         return JacksonUtils.serialize(vagrantConfig);
     }
 
-    private void scheduleFinishPipelineTask(Pipeline pipeline, Map<Job, BasicTask<Void>> taskMap) {
-        BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
+    private void scheduleFinishPipelineTask(Pipeline pipeline, Map<Job, Task<Void>> taskMap) {
+        Task<Void> task = TaskFactory.create("finish" + pipeline.getName(), () -> {
             try {
                 pipeline.getState().setState(StateEnum.SUCCESS);
                 reporter.reportInfo("Pipeline Finished");
                 String workDirectory = pipeline.getEnvironment().getWorkDirectory();
-                ProcessRunner.runOnSpecificFolder("vagrant destroy", reporter, workDirectory);
-                TaskFactory.dispose();
+                ProcessRunner.runOnSpecificFolder("vagrant destroy -f", reporter, workDirectory);
             } catch (Exception e) {
-
+                reporter.reportError("Error finishing pipeline");
+                logger.error("Error finishing pipeline", e);
+                throw e;
             }
         });
-        Task<Collection<Void>> tasks = TaskFactory.whenAllTasks(new ArrayList<>(taskMap.values()));
+        Task<Collection<Void>> tasks = TaskFactory.whenAll("parent_finish" + pipeline.getName(), new ArrayList<>(taskMap.values()));
         tasks.then(task);
     }
 
-    private Map<Job, BasicTask<Void>> getTasks(Collection<ExecutionNode> executionGraph, Pipeline pipeline, Map<Job, BasicTask<Void>> tasks) {
+    private void createTasks(Collection<ExecutionNode> executionGraph, Pipeline pipeline, Map<Job, Task<Void>> tasks) {
         for (ExecutionNode node : executionGraph) {
             Job job = node.getJob();
-            BasicTask<Void> task = (BasicTask<Void>) TaskFactory.createTask(() -> {
+
+            if (tasks.containsKey(job))
+                continue;
+
+            Task<Void> task = TaskFactory.create(job.getId(), () -> {
                 try {
                     runTask(job, pipeline);
                 } catch (EngineException e) {
                     updateState(pipeline, job, e, StateEnum.FAILED);
+                    throw e;
                 }
             });
+
             tasks.put(job, task);
             TASKS_BY_EXEC_ID.get(pipeline.getName()).put(job, task);
-            getTasks(node.getChilds(), pipeline, tasks);
+            createTasks(node.getChilds(), pipeline, tasks);
         }
-
-        return tasks;
     }
 
-    private void scheduleChildTasks(Pipeline pipeline, Map<Job, BasicTask<Void>> taskMap) {
-        for (Map.Entry<Job, BasicTask<Void>> entry : taskMap.entrySet()) {
-            if (!entry.getKey().getParents().isEmpty()) {
-                runWhenAll(pipeline, entry.getKey(), taskMap);
+    private void scheduleChildTasks(Pipeline pipeline, Map<Job, Task<Void>> tasksMap) {
+        for (Map.Entry<Job, Task<Void>> entry : tasksMap.entrySet()) {
+            Job job = entry.getKey();
+            if (!job.getParents().isEmpty()) {
+                runWhenAll(pipeline, job, tasksMap);
             }
         }
     }
 
-    private void updatePipelineState(String executionId, ExecutionState state) {
-        pipelines.get(executionId).setState(state);
-    }
-
-    private void runWhenAll(Pipeline pipeline, Job job, Map<Job, BasicTask<Void>> taskMap) {
+    private void runWhenAll(Pipeline pipeline, Job job, Map<Job, Task<Void>> taskMap) {
         Collection<Task<Void>> parentsTasks = getParentsTasks(pipeline, job.getParents());
-        Task<Collection<Void>> tasks = TaskFactory.whenAllTasks(parentsTasks);
+        Task<Collection<Void>> tasks = TaskFactory.whenAll(job.getId() + "_parents", parentsTasks);
         tasks.then(taskMap.get(job));
     }
 
@@ -232,11 +225,11 @@ public class EngineLocalVM extends Engine {
         Collection<Task<Void>> parentsTasks = new LinkedList<>();
 
         for (String parent : parents) {
-            Map<Job, BasicTask<Void>> jobBasicTaskMap = TASKS_BY_EXEC_ID.get(pipeline.getName());
-            jobBasicTaskMap.keySet().forEach((jobById) -> {
-                if (jobById.getId().equalsIgnoreCase(parent)) {
-                    BasicTask<Void> e = jobBasicTaskMap.get(jobById);
-                    parentsTasks.add(e);
+            Map<Job, Task<Void>> jobBasicTaskMap = TASKS_BY_EXEC_ID.get(pipeline.getName());
+            jobBasicTaskMap.keySet().forEach((job) -> {
+                if (job.getId().equalsIgnoreCase(parent)) {
+                    Task<Void> task = jobBasicTaskMap.get(job);
+                    parentsTasks.add(task);
                 }
             });
         }
@@ -244,25 +237,30 @@ public class EngineLocalVM extends Engine {
         return parentsTasks;
     }
 
+    private void updatePipelineState(String executionId, ExecutionState state) {
+        pipelines.get(executionId).setState(state);
+    }
+
     private void scheduleParentsTasks(Collection<ExecutionNode> executionGraph, String executionId,
-                                      Map<Job, BasicTask<Void>> taskMap) {
+                                      Map<Job, Task<Void>> taskMap) throws EngineException {
         try {
             executeParents(executionGraph, taskMap);
         } catch (EngineException e) {
             ExecutionState state = new ExecutionState(StateEnum.FAILED, e);
             updatePipelineState(executionId, state);
+            throw e;
         }
     }
 
-    private void executeParents(Collection<ExecutionNode> executionGraph, Map<Job, BasicTask<Void>> task)
+    private void executeParents(Collection<ExecutionNode> executionGraph, Map<Job, Task<Void>> task)
             throws EngineException {
         for (ExecutionNode parentNode : executionGraph) {
             Job job = parentNode.getJob();
-            if (!job.getParents().isEmpty())
-                continue;
+//            if (!job.getParents().isEmpty())
+//                continue;
             try {
                 logger.trace(TAG + ":: Executing step " + job.getId());
-                task.get(job).run();
+                task.get(job).start();
             } catch (Exception e) {
                 logger.error(TAG + ":: Executing step " + job.getId(), e);
                 throw new EngineException("Error executing step: " + job.getId(), e);
@@ -326,7 +324,7 @@ public class EngineLocalVM extends Engine {
 
     private void copyChainInputs(SimpleJob job, Pipeline pipeline) throws EngineException {
         String jobId = job.getId();
-        String destDir = pipeline.getEnvironment().getWorkDirectory() + fileSeparator;
+        String destDir = job.getEnvironment().getWorkDirectory() + File.separatorChar;
 
         for (Input inputCtx : job.getInputs()) {
             if (!inputCtx.getOriginStep().equals(jobId)) {
@@ -335,27 +333,32 @@ public class EngineLocalVM extends Engine {
                 Output outCtx = chainStep.getOutputById(inputCtx.getChainOutput());
                 List<String> usedBy = outCtx.getUsedBy();
 
-                String destDir1 = destDir + jobId + File.separatorChar;
                 if (usedBy != null) {
                     for (String dependent : usedBy) {
                         Output outputCtx = chainStep.getOutputById(dependent);
                         String value = outputCtx.getValue().toString();
-                        copyInput(destDir1, outDir, value);
+                        copyInput(destDir, outDir, value, outputCtx.getType());
                     }
                 } else {
                     String value = outCtx.getValue().toString();
-                    copyInput(destDir1, outDir, value);
+                    copyInput(destDir, outDir, value, outCtx.getType());
                 }
             }
         }
     }
 
-    private void copyInput(String destDir, String outDir, String value) throws EngineException {
+    private void copyInput(String destDir, String outDir, String value, String type) throws EngineException {
         try {
             String source = outDir + value;
             source = source.replace(fileSeparator, File.separatorChar + "");
             destDir = destDir.replace(fileSeparator, File.separatorChar + "");
-            IOUtils.copyFile(source, destDir);
+            if (type.equals("directory"))
+                IOUtils.copyDirectory(source, destDir + value);
+            else {
+                if (value.contains(fileSeparator))
+                    value = value.substring(value.indexOf(fileSeparator) + 1);
+                IOUtils.copyFile(source, destDir + value);
+            }
         } catch (IOException e) {
             throw new EngineException("Error copying input: " + value , e);
         }
@@ -370,7 +373,8 @@ public class EngineLocalVM extends Engine {
                     .append(" -c \"")
                     .append(cmdBuilded)
                     .append("\"");
-            return command.toString().replace(WORK_DIRECTORY, BASE_DIRECTORY);
+            String commandStr = command.toString();
+            return commandStr.replace(WORK_DIRECTORY, BASE_DIRECTORY).replace(File.separatorChar + "", fileSeparator);
         } catch (CommandBuilderException e) {
             logger.error(TAG + ":: Error when building step - " + job.getId(), e);
             throw new EngineException("Error when building step", e);
@@ -378,13 +382,13 @@ public class EngineLocalVM extends Engine {
     }
 
     private void validateOutputs(SimpleJob job, String pipelineName) throws EngineException {
-        String basePath = WORK_DIRECTORY + File.separatorChar + pipelineName + File.separatorChar + job.getId();
         for (Output outCtx : job.getOutputs()) {
             String type = outCtx.getType();
             if (type.contains("ile") || type.contains("irectory")) {
                 String out = outCtx.getValue().toString();
+                out = out.replace(fileSeparator, File.separatorChar + "");
                 try {
-                    IOUtils.findFiles(basePath, out);
+                    IOUtils.findFiles(job.getEnvironment().getOutputsDirectory(), out);
                 } catch (IOException e) {
                     throw new EngineException("Output " + outCtx.getName() +
                             " not found. Error running job " + job.getId(), e);

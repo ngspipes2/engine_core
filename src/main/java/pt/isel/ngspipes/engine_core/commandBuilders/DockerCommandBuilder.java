@@ -48,8 +48,9 @@ public class DockerCommandBuilder extends CommandBuilder {
         if (!config.containsKey(DOCKER_IMG_NAME_KEY))
             throw new CommandBuilderException("Docker execution context must contain a configuration (uri) specifying docker image.");
         String uri = config.get(DOCKER_IMG_NAME_KEY).toString();
-        String tag = config.get(DOCKER_IMG_TAG_KEY).toString();
-        return uri + ((tag != null) ? ":" + tag : "");
+        if (!config.containsKey(DOCKER_IMG_TAG_KEY))
+            return uri;
+        return uri + ":" + config.get(DOCKER_IMG_TAG_KEY).toString();
     }
 
 }
