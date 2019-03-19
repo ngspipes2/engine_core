@@ -35,7 +35,6 @@ public class TopologicSorter {
         Collection<Job> jobs = pipeline.getJobs();
         Map<String, Collection<Job>> chainsFrom = getChainFrom(jobs);
         Map<String, Collection<Job>> chainsTo = getChainTo(jobs);
-        Map<String, Collection<Job>> chainsFromCpy = getChainFrom(jobs);
         List<Job> roots = getRoots(jobs);
         List<ExecutionNode> orderedSteps = getSequentialRoots(getRootJobs(roots));
 

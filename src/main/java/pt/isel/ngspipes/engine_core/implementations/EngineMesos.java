@@ -84,9 +84,6 @@ public class EngineMesos extends Engine {
 
 
     @Override
-    protected void configure(Pipeline pipeline) throws EngineException { }
-
-    @Override
     public void run(Pipeline pipeline, Collection<ExecutionNode> executionGraph) {
         try {
             List<Job> executionJobs = new LinkedList<>();

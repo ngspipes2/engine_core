@@ -12,6 +12,9 @@ import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 
 public class EngineLocalVM extends Engine {
@@ -42,20 +45,20 @@ public class EngineLocalVM extends Engine {
     public EngineLocalVM(String workingDirectory) {
         super(workingDirectory, TAG, FILE_SEPARATOR);
     }
-
-    @Override
-    protected void configure(Pipeline pipeline) throws EngineException {
-        logger.info("Configuring " + TAG);
-        try {
-//            if (!exist) {
-                ipAddressSuffix++;
-                createAndCopyVMFiles(pipeline);
-                initVM(pipeline);
-//            }
-        } catch (IOException e) {
-            throw new EngineException("Error initiating engine", e);
-        }
-    }
+//
+//    @Override
+//    protected void configure(Pipeline pipeline) throws EngineException {
+//        logger.info("Configuring " + TAG);
+//        try {
+////            if (!exist) {
+//                ipAddressSuffix++;
+//                createAndCopyVMFiles(pipeline);
+//                initVM(pipeline);
+////            }
+//        } catch (IOException | ClassNotFoundException e) {
+//            throw new EngineException("Error initiating engine", e);
+//        }
+//    }
 
     @Override
     protected void run(Pipeline pipeline, Collection<ExecutionNode> graph) throws EngineException {
@@ -137,17 +140,19 @@ public class EngineLocalVM extends Engine {
         ProcessRunner.runOnSpecificFolder("vagrant up" , reporter, workDirectory);
     }
 
-    private void createAndCopyVMFiles(Pipeline pipeline) throws IOException {
+    private void createAndCopyVMFiles(Pipeline pipeline) throws IOException, ClassNotFoundException {
         createVmConfigFile(pipeline);
         String vagrantFileName = "Vagrantfile";
-        File source = getVagrantFile(vagrantFileName);
+        InputStream source = getVagrantFile(vagrantFileName);
         String destPath = pipeline.getEnvironment().getWorkDirectory() + fileSeparator + vagrantFileName;
-        IOUtils.copyFile(source.getAbsolutePath(), destPath);
+        Files.copy(source, Paths.get(destPath));
     }
 
-    private File getVagrantFile(String vagrantFileName) {
+    private InputStream getVagrantFile(String vagrantFileName) throws ClassNotFoundException {
         ClassLoader classLoader = getClass().getClassLoader();
-        return new File(classLoader.getResource(vagrantFileName).getFile());
+        Class klass = Class.forName(EngineLocalVM.class.getName());
+        InputStream in = klass.getResourceAsStream(vagrantFileName);
+        return in;
     }
 
     private void createVmConfigFile(Pipeline pipeline) throws IOException {
@@ -196,6 +201,7 @@ public class EngineLocalVM extends Engine {
                     runTask(job, pipeline);
                 } catch (EngineException e) {
                     updateState(pipeline, job, e, StateEnum.FAILED);
+
                     throw e;
                 }
             });
