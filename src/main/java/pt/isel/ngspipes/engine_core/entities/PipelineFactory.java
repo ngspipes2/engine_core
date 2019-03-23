@@ -1,12 +1,12 @@
-package pt.isel.ngspipes.engine_core.entities.factories;
+package pt.isel.ngspipes.engine_core.entities;
 
-import pt.isel.ngspipes.engine_core.entities.Arguments;
-import pt.isel.ngspipes.engine_core.entities.Environment;
-import pt.isel.ngspipes.engine_core.entities.PipelineEnvironment;
-import pt.isel.ngspipes.engine_core.entities.contexts.*;
+import pt.isel.ngspipes.engine_common.entities.Environment;
+import pt.isel.ngspipes.engine_common.entities.PipelineEnvironment;
+import pt.isel.ngspipes.engine_common.entities.contexts.*;
+import pt.isel.ngspipes.engine_common.entities.factory.JobFactory;
+import pt.isel.ngspipes.engine_common.exception.EngineCommonException;
+import pt.isel.ngspipes.engine_common.entities.Arguments;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
-import pt.isel.ngspipes.engine_core.utils.DescriptorsUtils;
-import pt.isel.ngspipes.engine_core.utils.RepositoryUtils;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IRepositoryDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.repository.IToolRepositoryDescriptor;
@@ -15,6 +15,8 @@ import pt.isel.ngspipes.pipeline_descriptor.step.exec.ICommandExecDescriptor;
 import pt.isel.ngspipes.pipeline_descriptor.step.exec.IExecDescriptor;
 import pt.isel.ngspipes.tool_descriptor.interfaces.ICommandDescriptor;
 import pt.isel.ngspipes.tool_repository.interfaces.IToolsRepository;
+import pt.isel.ngspipes.engine_common.utils.DescriptorsUtils;
+import pt.isel.ngspipes.engine_common.utils.RepositoryUtils;
 
 import java.util.*;
 import java.util.function.Function;
@@ -25,13 +27,18 @@ public class PipelineFactory {
                                   Arguments arguments, String workingDirectory, String fileSeparator) throws EngineException {
 
         PipelineEnvironment environment = getPipelineEnvironment(arguments, workingDirectory);
-        List<Job> jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory(), fileSeparator);
-        Pipeline pipeline = new Pipeline(jobs, executionId, environment);
-        setStepsResources(pipeline, pipelineDescriptor, parameters);
-        setOutputs(pipeline, pipelineDescriptor, pipeline.getJobs());
-        JobFactory.expandReadyJobs(jobs, pipeline, fileSeparator);
-        setChains(jobs);
-        return pipeline;
+        List<Job> jobs = null;
+        try {
+            jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory(), fileSeparator);
+            Pipeline pipeline = new Pipeline(jobs, executionId, environment);
+            setStepsResources(pipeline, pipelineDescriptor, parameters);
+            setOutputs(pipeline, pipelineDescriptor, pipeline.getJobs());
+            JobFactory.expandReadyJobs(jobs, pipeline, fileSeparator);
+            setChains(jobs);
+            return pipeline;
+        } catch (EngineCommonException e) {
+            throw new EngineException("Error creating pipeline " + executionId + " intermediate representation.", e);
+        }
     }
 
     public static PipelineEnvironment getPipelineEnvironment(Arguments arguments, String workingDirectory) {
@@ -123,7 +130,12 @@ public class PipelineFactory {
                 throw new EngineException("Repositories ids can be duplicated. Id: " + repo.getId() + " is duplicated.");
             if (repo instanceof IToolRepositoryDescriptor) {
                 IToolRepositoryDescriptor toolsRepoDesc = (IToolRepositoryDescriptor) repo;
-                IToolsRepository toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
+                IToolsRepository toolsRepo = null;
+                try {
+                    toolsRepo = RepositoryUtils.getToolsRepository(toolsRepoDesc, parameters);
+                } catch (EngineCommonException e) {
+                    throw new EngineException("Error getting " + toolsRepoDesc.getId() + " tools repository.", e);
+                }
                 toolsRepositoryMap.put(repo.getId(), toolsRepo);
             }
         }
@@ -165,18 +177,22 @@ public class PipelineFactory {
                                 IPipelineDescriptor pipelineDesc, Map<String, Object> params) throws EngineException {
 
         Job stepCtx = pipeline.getJobById(stepID);
-        if (stepCtx instanceof SimpleJob) {
-            IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
-            String repositoryId = step.getExec().getRepositoryId();
-            IToolRepositoryDescriptor toolRepo = DescriptorsUtils.getToolRepositoryDescriptorById(repositoryId, pipelineDesc.getRepositories());
-            IToolsRepository repo = RepositoryUtils.getToolsRepository(toolRepo, params);
-            Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
-            return value < stepValue ? value : stepValue;
-        } else if (stepCtx instanceof ComposeJob){
-            int highestValueFromPipeline = getHighestValueFromPipeline(pipelineDesc, params, func);
-            return value < highestValueFromPipeline ? value : highestValueFromPipeline;
-        }
-        return value;
+            try {
+                if (stepCtx instanceof SimpleJob) {
+                    IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
+                    String repositoryId = step.getExec().getRepositoryId();
+                    IToolRepositoryDescriptor toolRepo = DescriptorsUtils.getToolRepositoryDescriptorById(repositoryId, pipelineDesc.getRepositories());
+                    IToolsRepository repo = RepositoryUtils.getToolsRepository(toolRepo, params);
+                    Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
+                    return value < stepValue ? value : stepValue;
+                } else if (stepCtx instanceof ComposeJob){
+                    int highestValueFromPipeline = getHighestValueFromPipeline(pipelineDesc, params, func);
+                    return value < highestValueFromPipeline ? value : highestValueFromPipeline;
+                }
+                return value;
+            } catch (EngineCommonException e) {
+                throw new EngineException("Error getting resource value.", e);
+            }
     }
 
     // NÃO ESTOU A CONSIDERAR OS STEPS K SEJAM SUBPIPELINE DESTE SUBPIPELINE
@@ -189,7 +205,12 @@ public class PipelineFactory {
             IExecDescriptor execDesc = stepDesc.getExec();
             if (execDesc instanceof ICommandDescriptor) {
                 IToolsRepository toolsRepo = toolsRepos.get(execDesc.getRepositoryId());
-                ICommandDescriptor commandDescriptor = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) execDesc);
+                ICommandDescriptor commandDescriptor = null;
+                try {
+                    commandDescriptor = DescriptorsUtils.getCommand(toolsRepo, (ICommandExecDescriptor) execDesc);
+                } catch (EngineCommonException e) {
+                    throw new EngineException("Error getting biggest value of resource.", e);
+                }
                 int value = func.apply(commandDescriptor);
                 if (highest < value) {
                     highest = value;
