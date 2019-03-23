@@ -1,11 +1,16 @@
-import entities.ConsoleArguments;
-import executionReporter.ConsoleReporter;
-import implementations.VagrantExecutor;
-import interfaces.IExecutor;
+import pt.isel.ngspipes.engine_common.entities.ConsoleArguments;
+import pt.isel.ngspipes.engine_common.entities.StateEnum;
+import pt.isel.ngspipes.engine_common.entities.contexts.Pipeline;
+import pt.isel.ngspipes.engine_common.executionReporter.ConsoleReporter;
+import pt.isel.ngspipes.engine_executor.implementations.VagrantExecutor;
+import pt.isel.ngspipes.engine_common.interfaces.IExecutor;
 import org.junit.Before;
 import org.junit.Test;
 import pt.isel.ngspipes.dsl_parser.domain.NGSPipesParser;
 import pt.isel.ngspipes.dsl_parser.transversal.ParserException;
+import pt.isel.ngspipes.engine_core.exception.EngineException;
+import pt.isel.ngspipes.engine_core.implementations.Engine;
+import pt.isel.ngspipes.engine_core.interfaces.IEngine;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 
 import java.io.BufferedReader;
@@ -21,7 +26,8 @@ public class VagrantExecutorTest {
     //        static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
     static final String outPath = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/outputs";
 
-    IExecutor engine = new VagrantExecutor(new ConsoleReporter());
+    IExecutor executor = new VagrantExecutor(new ConsoleReporter(), "D://NGSPipes");
+    IEngine engine = new Engine(executor);
     IPipelineDescriptor pipelineDescriptor;
     Map<String, Object> parameters ;
     ConsoleArguments arguments;
@@ -44,7 +50,6 @@ public class VagrantExecutorTest {
         return pipelineDescriptor;
     }
 
-
     private static String readContent(String filePath) throws IOException {
         StringBuilder sb = new StringBuilder();
         String str;
@@ -60,12 +65,45 @@ public class VagrantExecutorTest {
 
     @Test
     public void sequentialTest() {
+        long init = System.currentTimeMillis();
+        try {
+                Pipeline pipeline = engine.execute(pipelineDescriptor, parameters, arguments);
+                do {
+                    if (pipeline.getState().getState().equals(StateEnum.SUCCESS))
+                        break;
+                    if (pipeline.getState().getState().equals(StateEnum.FAILED))
+                        break;
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
 
+                    }
+            } while(true);
+        } catch (EngineException e) {
+            System.out.println(e.getMessage());
+        }
+        System.out.println((System.currentTimeMillis() - init) * 0.000016667);
     }
 
 
     @Test
     public void parallelTest() {
+        long init = System.currentTimeMillis();
+        try {
+            arguments.parallel = true;
+            Pipeline pipeline = engine.execute(pipelineDescriptor, parameters, arguments);
+            do {
+                if (pipeline.getState().getState().equals(StateEnum.SUCCESS))
+                    break;
+                if (pipeline.getState().getState().equals(StateEnum.FAILED))
+                    break;
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
 
+                }
+            } while(true);
+        } catch (EngineException e) { }
+        System.out.println((System.currentTimeMillis() - init) * 0.000016667);
     }
 }
