@@ -1,32 +1,33 @@
 package pt.isel.ngspipes.engine_core.implementations;
 
 import com.github.brunomndantas.tpl4j.factory.TaskFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import pt.isel.ngspipes.engine_common.entities.Arguments;
 import pt.isel.ngspipes.engine_common.entities.ExecutionNode;
 import pt.isel.ngspipes.engine_common.entities.ExecutionState;
 import pt.isel.ngspipes.engine_common.entities.StateEnum;
 import pt.isel.ngspipes.engine_common.entities.contexts.Job;
+import pt.isel.ngspipes.engine_common.entities.contexts.Output;
 import pt.isel.ngspipes.engine_common.entities.contexts.Pipeline;
 import pt.isel.ngspipes.engine_common.entities.factory.JobFactory;
 import pt.isel.ngspipes.engine_common.exception.EngineCommonException;
 import pt.isel.ngspipes.engine_common.exception.ExecutorException;
 import pt.isel.ngspipes.engine_common.interfaces.IExecutor;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import pt.isel.ngspipes.engine_common.entities.Arguments;
-import pt.isel.ngspipes.engine_core.entities.PipelineFactory;
-import pt.isel.ngspipes.engine_core.exception.EngineException;
-import pt.isel.ngspipes.engine_core.interfaces.IEngine;
+import pt.isel.ngspipes.engine_common.utils.IOUtils;
 import pt.isel.ngspipes.engine_common.utils.JacksonUtils;
-import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 import pt.isel.ngspipes.engine_common.utils.TopologicSorter;
 import pt.isel.ngspipes.engine_common.utils.ValidateUtils;
+import pt.isel.ngspipes.engine_core.entities.PipelineFactory;
+import pt.isel.ngspipes.engine_core.entities.Status;
+import pt.isel.ngspipes.engine_core.exception.EngineException;
+import pt.isel.ngspipes.engine_core.interfaces.IEngine;
+import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Calendar;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class Engine implements IEngine {
 
@@ -43,7 +44,7 @@ public class Engine implements IEngine {
                             Arguments arguments) throws EngineException {
         String id = generateExecutionId(pipelineDescriptor.getName());//"1234";
         validate(pipelineDescriptor, parameters);
-        Pipeline pipeline = createPipeline(pipelineDescriptor, parameters, arguments, id);
+        Pipeline pipeline = createPipeline(pipelineDescriptor, parameters, arguments, id, executor.getFileSeparator());
         return internalExecute(arguments.parallel, pipeline);
     }
 
@@ -52,7 +53,7 @@ public class Engine implements IEngine {
         Pipeline pipeline;
         try {
             pipeline = JacksonUtils.deserialize(intermediateRepresentation, Pipeline.class);
-            pipeline.setEnvironment(JobFactory.getJobEnvironment(pipeline.getName(), executor.getWorkingDirectory(), File.separatorChar + ""));
+            pipeline.setEnvironment(JobFactory.getJobEnvironment(pipeline.getName(), executor.getWorkingDirectory(), executor.getFileSeparator()));
         } catch (IOException e) {
             logger.error("Error loading pipeline from intermediate representation supplied", e);
             throw new EngineException("Error loading pipeline from intermediate representation supplied", e);
@@ -87,14 +88,25 @@ public class Engine implements IEngine {
         }
     }
 
-
-    void updateState(Pipeline pipeline, Job job, Exception e, StateEnum state) {
-        ExecutionState newState = new ExecutionState(state, e);
-        job.getState().setState(newState.getState());
-        if (e != null)
-            pipeline.setState(newState);
+    @Override
+    public void getPipelineOutputs(String executionId, String outputDirectory) throws EngineException {
+        try {
+            Pipeline pipelineExecId = pipelines.get(executionId);
+            executor.getPipelineOutputs(pipelineExecId, outputDirectory);
+        } catch (ExecutorException e) {
+            throw new EngineException("Error getting pipeline " + executionId + "outputs.", e);
+        }
     }
 
+    @Override
+    public Status getStatus(String executionId) {
+        if (pipelines.containsKey(executionId)) {
+            Pipeline pipelineExecId = pipelines.get(executionId);
+            List<ExecutionState> jobsStatus = pipelineExecId.getJobs().stream().map(Job::getState).collect(Collectors.toList());
+            return new Status(pipelineExecId.getState(), jobsStatus);
+        }
+        return null;
+    }
 
 
     private void stage(Pipeline pipeline) throws EngineException {
@@ -103,8 +115,8 @@ public class Engine implements IEngine {
         } catch (EngineCommonException e) {
             throw new EngineException("Error validating pipeline jobs", e);
         }
-        schedulePipeline(pipeline);
         pipeline.getState().setState(StateEnum.SCHEDULE);
+        schedulePipeline(pipeline);
     }
 
     private void schedulePipeline(Pipeline pipeline) throws EngineException {
@@ -125,10 +137,10 @@ public class Engine implements IEngine {
     }
 
     private Pipeline createPipeline(IPipelineDescriptor pipelineDescriptor, Map<String, Object> parameters,
-                                    Arguments arguments, String id) throws EngineException {
+                                    Arguments arguments, String id, String fileSeparator) throws EngineException {
         String pipelineWorkingDirectory = getPipelineWorkingDirectory(id);
         return PipelineFactory.create(id, pipelineDescriptor, parameters, arguments,
-                                        pipelineWorkingDirectory, File.separatorChar + "");
+                                        pipelineWorkingDirectory, fileSeparator);
     }
 
     private void registerPipeline(Pipeline pipeline) {
@@ -192,7 +204,7 @@ public class Engine implements IEngine {
     }
 
     private String getPipelineWorkingDirectory(String executionId) {
-        String workDirectory = executor.getWorkingDirectory() + File.separatorChar + executionId;
+        String workDirectory = executor.getWorkingDirectory() + executor.getFileSeparator() + executionId;
         return workDirectory.replace(" ", "");
     }
 

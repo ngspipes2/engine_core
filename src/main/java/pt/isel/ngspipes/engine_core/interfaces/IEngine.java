@@ -2,6 +2,7 @@ package pt.isel.ngspipes.engine_core.interfaces;
 
 import pt.isel.ngspipes.engine_common.entities.contexts.Pipeline;
 import pt.isel.ngspipes.engine_common.entities.Arguments;
+import pt.isel.ngspipes.engine_core.entities.Status;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 
@@ -14,7 +15,7 @@ public interface IEngine {
     boolean stop(String executionId) throws EngineException;
     boolean clean(String executionId) throws EngineException;
     boolean cleanAll() throws EngineException;
-//    void getPipelineOutputs(String executionId, String outputDirectory) throws EngineException;
-//    Status getStatus(String executionId);
+    void getPipelineOutputs(String executionId, String outputDirectory) throws EngineException;
+    Status getStatus(String executionId);
 
 }

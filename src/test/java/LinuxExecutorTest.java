@@ -7,29 +7,25 @@ import pt.isel.ngspipes.engine_common.entities.StateEnum;
 import pt.isel.ngspipes.engine_common.entities.contexts.Pipeline;
 import pt.isel.ngspipes.engine_common.executionReporter.ConsoleReporter;
 import pt.isel.ngspipes.engine_common.interfaces.IExecutor;
-import pt.isel.ngspipes.engine_core.entities.Status;
 import pt.isel.ngspipes.engine_core.exception.EngineException;
 import pt.isel.ngspipes.engine_core.implementations.Engine;
 import pt.isel.ngspipes.engine_core.interfaces.IEngine;
-import pt.isel.ngspipes.engine_executor.implementations.VagrantExecutor;
+import pt.isel.ngspipes.engine_executor.implementations.LinuxExecutor;
 import pt.isel.ngspipes.pipeline_descriptor.IPipelineDescriptor;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-public class VagrantExecutorTest {
+public class LinuxExecutorTest {
 
 
-    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipeline.pipes";
-    //        static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
-    static final String outPath = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/outputs";
-    static final String workingDirectory = "D:" + File.separatorChar + "NGSPipes";
+    static final String pipes = "/home/osboxes/Desktop/resources/pipelineLx.pipes";
+    static final String outPath = "/home/osboxes/Desktop";
 
-    IExecutor executor = new VagrantExecutor(new ConsoleReporter(), workingDirectory);
+    IExecutor executor = new LinuxExecutor(new ConsoleReporter());
     IEngine engine = new Engine(executor);
     IPipelineDescriptor pipelineDescriptor;
     Map<String, Object> parameters ;
@@ -37,7 +33,7 @@ public class VagrantExecutorTest {
 
     @Before
     public void init() throws IOException, ParserException {
-        arguments = new ConsoleArguments(pipes, workingDirectory, outPath, 4, 8192, 0, false, parameters);
+        arguments = new ConsoleArguments(pipes, "", outPath, 1, 6144, 0, false, parameters);
         pipelineDescriptor = getPipelineDescriptor(arguments);
         parameters = new HashMap<String, Object>(){{
             put("blastx_out", "blast.out");
@@ -71,26 +67,17 @@ public class VagrantExecutorTest {
         long init = System.currentTimeMillis();
         try {
             Pipeline pipeline = engine.execute(pipelineDescriptor, parameters, arguments);
-//            Pipeline pipeline1 = engine.execute(pipelineDescriptor, parameters, arguments);
-                do {
-                    engine.getStatus(pipeline.getName());
-                    if (pipeline.getState().getState().equals(StateEnum.SUCCESS))
-                        break;
-                    if (pipeline.getState().getState().equals(StateEnum.FAILED))
-                        break;
-//                    if (pipeline1.getState().getState().equals(StateEnum.SUCCESS))
-//                        break;
-//                    if (pipeline1.getState().getState().equals(StateEnum.FAILED))
-//                        break;
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
+            do {
+                if (pipeline.getState().getState().equals(StateEnum.SUCCESS))
+                    break;
+                if (pipeline.getState().getState().equals(StateEnum.FAILED))
+                    break;
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
 
-                    }
+                }
             } while(true);
-            String execId = pipeline.getName();
-            Status status = engine.getStatus(execId);
-            engine.getPipelineOutputs(execId, outPath);
         } catch (EngineException e) {
             System.out.println(e.getMessage());
         }
@@ -115,9 +102,7 @@ public class VagrantExecutorTest {
 
                 }
             } while(true);
-        } catch (EngineException e) {
-            System.out.println();
-        }
+        } catch (EngineException e) { }
         System.out.println((System.currentTimeMillis() - init) * 0.000016667);
     }
 }
