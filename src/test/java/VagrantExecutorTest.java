@@ -116,6 +116,7 @@ public class VagrantExecutorTest {
                 }
             } while(true);
         } catch (EngineException e) {
+            e.printStackTrace();
             System.out.println();
         }
         System.out.println((System.currentTimeMillis() - init) * 0.000016667);

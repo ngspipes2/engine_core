@@ -102,7 +102,9 @@ public class Engine implements IEngine {
     public Status getStatus(String executionId) {
         if (pipelines.containsKey(executionId)) {
             Pipeline pipelineExecId = pipelines.get(executionId);
-            List<ExecutionState> jobsStatus = pipelineExecId.getJobs().stream().map(Job::getState).collect(Collectors.toList());
+            Map<String, ExecutionState> jobsStatus = new HashMap<>();
+            for (Job job : pipelineExecId.getJobs())
+                jobsStatus.put(job.getId(), job.getState());
             return new Status(pipelineExecId.getState(), jobsStatus);
         }
         return null;
