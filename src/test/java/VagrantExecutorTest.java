@@ -23,11 +23,11 @@ import java.util.Map;
 
 public class VagrantExecutorTest {
 
-
-    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipeline.pipes";
-    //        static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
+        static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSplitJoin.pipes";
+//static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipeline.pipes";
+//    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
     static final String outPath = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/outputs";
-    static final String workingDirectory = "D:" + File.separatorChar + "NGSPipes";
+    static final String workingDirectory = "D:" + File.separatorChar + "NGSPipes/Engine";
 
     IExecutor executor = new VagrantExecutor(new ConsoleReporter(), workingDirectory);
     IEngine engine = new Engine(executor);

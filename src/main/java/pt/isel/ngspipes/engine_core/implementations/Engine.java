@@ -94,7 +94,7 @@ public class Engine implements IEngine {
             Pipeline pipelineExecId = pipelines.get(executionId);
             executor.getPipelineOutputs(pipelineExecId, outputDirectory);
         } catch (ExecutorException e) {
-            throw new EngineException("Error getting pipeline " + executionId + "outputs.", e);
+            throw new EngineException("Error getting pipeline " + executionId + " outputs.", e);
         }
     }
 

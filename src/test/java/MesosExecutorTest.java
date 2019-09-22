@@ -25,8 +25,9 @@ import java.util.Map;
 public class MesosExecutorTest {
 
 
-    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipeline.pipes";
-    //        static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
+//    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSplitJoin.pipes";
+//static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipeline.pipes";
+    static final String pipes = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/pipelineSpread.pipes";
     static final String outPath = "E:/Work/NGSPipes/ngspipes2/engine_local/src/test/resources/outputs";
     static final String workingDirectory = "/home/calmen/pipes";
 
@@ -38,7 +39,7 @@ public class MesosExecutorTest {
     IExecutor executor = new MesosExecutor(new ConsoleReporter(), mesosInfo);
     IEngine engine = new Engine(executor);
     IPipelineDescriptor pipelineDescriptor;
-    Map<String, Object> parameters ;
+    Map<String, Object> parameters;
     ConsoleArguments arguments;
 
     @Before
@@ -84,7 +85,7 @@ public class MesosExecutorTest {
                     break;
                 try {
                     Thread.sleep(1000);
-                } catch (InterruptedException e) {
+                } catch (InterruptedException ignored) {
 
                 }
             } while(true);
