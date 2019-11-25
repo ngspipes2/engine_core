@@ -39,13 +39,13 @@ jar {
         configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
     }
 }
-
-def engineProjects = [':dsl',':engine']
-task engineCoreJar( type: Jar , dependsOn: engineProjects.collect{ it+":compileJava"}) {
-    baseName = 'build/engine-1.1'
-    from files(engineProjects.collect{ project(it).sourceSets.main.output })
-    from('engine/engine_core/src/main/java/') {
-        include 'resources/'
-    }
-}
+//
+//def engineProjects = [':dsl',':engine']
+//task engineCoreJar( type: Jar , dependsOn: engineProjects.collect{ it+":compileJava"}) {
+//    baseName = 'build/engine-1.1'
+//    from files(engineProjects.collect{ project(it).sourceSets.main.output })
+//    from('engine/engine_core/src/main/java/') {
+//        include 'resources/'
+//    }
+//}
 

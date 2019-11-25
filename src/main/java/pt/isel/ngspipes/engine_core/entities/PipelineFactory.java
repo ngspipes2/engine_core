@@ -28,11 +28,12 @@ public class PipelineFactory {
 
         PipelineEnvironment environment = getPipelineEnvironment(arguments, workingDirectory);
         Map<String, IToolsRepository> toolsRepos = getToolsRepositories(pipelineDescriptor.getRepositories(), parameters);
+        Map<String, ICommandDescriptor> cmdDescriptorById = new HashMap<>();
         List<Job> jobs = null;
         try {
-            jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory(), fileSeparator, toolsRepos);
+            jobs = JobFactory.getJobs(pipelineDescriptor, parameters, environment.getWorkDirectory(), fileSeparator, toolsRepos, cmdDescriptorById);
             Pipeline pipeline = new Pipeline(jobs, executionId, environment);
-            setStepsResources(pipeline, pipelineDescriptor, toolsRepos);
+            setStepsResources(pipeline, pipelineDescriptor, toolsRepos, cmdDescriptorById);
             setOutputs(pipeline, pipelineDescriptor, pipeline.getJobs());
             JobFactory.expandReadyJobs(jobs, pipeline, fileSeparator);
             setChains(jobs);
@@ -148,10 +149,11 @@ public class PipelineFactory {
 
 
     private static void setStepsResources(Pipeline pipeline, IPipelineDescriptor pipelineDescriptor,
-                                          Map<String, IToolsRepository> toolsRepos) throws EngineException {
+                                          Map<String, IToolsRepository> toolsRepos,
+                                          Map<String, ICommandDescriptor> cmdDescriptorById) throws EngineException {
 
         for (Job job : pipeline.getJobs()) {
-            Arguments arguments = getStepArguments(pipeline, job, pipelineDescriptor, toolsRepos);
+            Arguments arguments = getStepArguments(pipeline, job, pipelineDescriptor, toolsRepos, cmdDescriptorById);
             job.getEnvironment().setMemory(arguments.mem);
             job.getEnvironment().setDisk(arguments.disk);
             job.getEnvironment().setCpu(arguments.cpus);
@@ -160,13 +162,14 @@ public class PipelineFactory {
 
 
     private static Arguments getStepArguments(Pipeline pipeline, Job stepCtx, IPipelineDescriptor pipelineDescriptor,
-                                              Map<String, IToolsRepository> toolsRepos) throws EngineException {
+                                              Map<String, IToolsRepository> toolsRepos,
+                                              Map<String, ICommandDescriptor> cmdDescriptorById) throws EngineException {
         Environment environment = pipeline.getEnvironment();
         Arguments args = new Arguments();
         String stepId = stepCtx.getId();
-        int mem = getValue(pipeline, stepId, environment.getMemory(), ICommandDescriptor::getRecommendedMemory, pipelineDescriptor, toolsRepos);
-        int cpus = getValue(pipeline, stepId, environment.getCpu(), ICommandDescriptor::getRecommendedCpu, pipelineDescriptor, toolsRepos);
-        int disk = getValue(pipeline, stepId, environment.getDisk(), ICommandDescriptor::getRecommendedDisk, pipelineDescriptor, toolsRepos);
+        int mem = getValue(pipeline, stepId, environment.getMemory(), ICommandDescriptor::getRecommendedMemory, pipelineDescriptor, toolsRepos, cmdDescriptorById);
+        int cpus = getValue(pipeline, stepId, environment.getCpu(), ICommandDescriptor::getRecommendedCpu, pipelineDescriptor, toolsRepos, cmdDescriptorById);
+        int disk = getValue(pipeline, stepId, environment.getDisk(), ICommandDescriptor::getRecommendedDisk, pipelineDescriptor, toolsRepos, cmdDescriptorById);
         int pipelineMem = pipeline.getEnvironment().getMemory();
         int pipelineCpu = pipeline.getEnvironment().getCpu();
         int pipelineDisk = pipeline.getEnvironment().getDisk();
@@ -177,24 +180,28 @@ public class PipelineFactory {
     }
 
     private static int getValue(Pipeline pipeline, String stepID, int value, Function<ICommandDescriptor, Integer> func,
-                                IPipelineDescriptor pipelineDesc, Map<String, IToolsRepository> toolsRepos) throws EngineException {
+                                IPipelineDescriptor pipelineDesc, Map<String, IToolsRepository> toolsRepos,
+                                Map<String, ICommandDescriptor> cmdDescriptorById) throws EngineException {
 
         Job stepCtx = pipeline.getJobById(stepID);
-            try {
-                if (stepCtx instanceof SimpleJob) {
-                    IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
-                    String repositoryId = step.getExec().getRepositoryId();
-                    IToolsRepository repo = toolsRepos.get(repositoryId);
-                    Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
-                    return value < stepValue ? value : stepValue;
-                } else if (stepCtx instanceof ComposeJob){
-                    int highestValueFromPipeline = getHighestValueFromPipeline(pipelineDesc.getSteps(), toolsRepos, func);
-                    return value < highestValueFromPipeline ? value : highestValueFromPipeline;
-                }
-                return value;
-            } catch (EngineCommonException e) {
-                throw new EngineException("Error getting resource value.", e);
-            }
+//            try {
+                ICommandDescriptor cmdDesc = cmdDescriptorById.get(stepCtx.getId());
+                Integer stepValue = func.apply(cmdDesc);
+                return value < stepValue ? value : stepValue;
+//                if (stepCtx instanceof SimpleJob) {
+//                    IStepDescriptor step = DescriptorsUtils.getStepById(pipelineDesc, stepCtx.getId());
+//                    String repositoryId = step.getExec().getRepositoryId();
+//                    IToolsRepository repo = toolsRepos.get(repositoryId);
+//                    Integer stepValue = func.apply(DescriptorsUtils.getCommand(repo, (ICommandExecDescriptor) step.getExec()));
+//                    return value < stepValue ? value : stepValue;
+//                } else if (stepCtx instanceof ComposeJob){
+//                    int highestValueFromPipeline = getHighestValueFromPipeline(pipelineDesc.getSteps(), toolsRepos, func);
+//                    return value < highestValueFromPipeline ? value : highestValueFromPipeline;
+//                }
+//                return value;
+//            } catch (EngineCommonException e) {
+//                throw new EngineException("Error getting resource value.", e);
+//            }
     }
 
     // NÃO ESTOU A CONSIDERAR OS STEPS K SEJAM SUBPIPELINE DESTE SUBPIPELINE
